@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-single/
+.netlify/
+# keep business data out of the repository
+public/data/
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+
+# NetSuite keys
+.env
+.env.*
