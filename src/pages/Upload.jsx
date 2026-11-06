@@ -83,7 +83,7 @@ export default function Upload() {
     setResult(null); setBusy({ stage: 'Connecting to NetSuite', pct: 0.03 });
     try {
       const r = await pull();
-      await finish(await processRows(r.header, r.rows, 'NetSuite Data Sync', (stage, p) => setBusy({ stage, pct: p }), r.landed));
+      await finish(await processRows(r.header, r.rows, 'NetSuite Data Sync', (stage, p) => setBusy({ stage, pct: p }), r.extras));
     } catch (e) { setResult({ ok: false, error: e.message }); }
     finally { setBusy(null); }
   };

@@ -1,5 +1,5 @@
 // "Landed cost distribution": the posted landed cost of the given cars, split by cost type
-// (ocean freight, clearing, customs duty...) in each car's IBV landed-cost proportions. Used on Outbound and Costs.
+// (ocean freight, clearing, customs duty...) in each car's IBV landed-cost proportions. Used on Inbound, Outbound and Costs.
 import { useMemo } from 'react';
 import { useChartTheme } from '../theme.js';
 import EChart from './EChart.jsx';
@@ -47,6 +47,7 @@ export default function LandedMix({ cars, LC, selected, onPick, what = 'cars' })
         columns: [{ key: 'c', label: 'Cost type' }, { key: 'v', label: 'Landed cost (AED)', align: 'r', fmt: int },
           { key: 's', label: 'Share', align: 'r', fmt: (x) => pct(x, 1), csv: (r) => (r.s * 100).toFixed(1) }],
         rows: mix.rows.map((r) => ({ ...r, s: share(r.v), __key: r.c })), search: false, csvName: 'landed-cost-mix',
+        totals: (rows) => ({ c: 'Total', v: int(rows.reduce((a, r) => a + r.v, 0)), s: pct(rows.reduce((a, r) => a + r.s, 0), 1) }),
       } : undefined}>
       {!mix ? <p className="muted" style={{ padding: 12 }}>The split comes from NetSuite Data Sync (an export file doesn't carry it) - run the sync on Upload Data to see it.</p>
         : mix.rows.length ? <EChart option={opt} height={rowsHeight(mix.rows.length, 34)} label="Landed cost by cost type" onPick={(i) => onPick(mix.rows[i].c)} />

@@ -41,13 +41,14 @@ export function hBars(t, cats, series, opts = {}) {
   const last = series.length - 1;
   const totals = cats.map((_, i) => series.reduce((a, s) => a + (s.data[i] || 0), 0));
   const dim = dimmer(cats, selected);
+  const endLen = endLabel ? Math.max(0, ...cats.map((_, i) => String(endText ? endText(i) : fmt(totals[i])).length)) : 0;
   return {
     animationDuration: 250,
-    grid: { left: 6, right: endLabel ? 70 : 18, top: 6, bottom: 4, containLabel: true },
+    grid: { left: 6, right: endLabel ? Math.min(180, Math.max(46, Math.round(endLen * 7.5) + 14)) : 18, top: 6, bottom: 4, containLabel: true },
     xAxis: { type: 'value', ...axis(t), axisLine: { show: false }, axisLabel: { ...axis(t).axisLabel, formatter: (v) => axisFmt(v) } },
     yAxis: {
       type: 'category', data: cats, inverse: true, ...axis(t), splitLine: { show: false }, triggerEvent: true,
-      axisLabel: { color: t.ink2, fontFamily: t.fontUi, fontSize: 12, width: catWidth, overflow: 'truncate', formatter: catFmt },
+      axisLabel: { color: t.ink, fontFamily: t.fontUi, fontSize: 12, fontWeight: 600, width: catWidth, overflow: 'truncate', formatter: catFmt },
     },
     tooltip: tooltip(t, {
       trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: t.grid, opacity: 0.6 } },
@@ -66,7 +67,7 @@ export function hBars(t, cats, series, opts = {}) {
       itemStyle: { color: s.color, borderRadius: !stacked || k === last ? [0, 4, 4, 0] : 0, borderColor: t.surface, borderWidth: stacked ? 1 : 0 },
       emphasis: { itemStyle: { opacity: 0.85 } },
       label: endLabel && (!stacked || k === last) ? {
-        show: true, position: 'right', color: t.ink2, fontFamily: t.fontUi, fontSize: 11.5,
+        show: true, position: 'right', color: t.ink, fontFamily: t.fontUi, fontSize: 12, fontWeight: 700,
         formatter: (p) => (endText ? endText(p.dataIndex) : fmt(stacked ? totals[p.dataIndex] : p.value)),
       } : { show: false },
     })),
@@ -99,7 +100,7 @@ export function columns(t, cats, series, opts = {}) {
       itemStyle: { color: s.color, borderRadius: !stacked || k === last ? [4, 4, 0, 0] : 0, borderColor: t.surface, borderWidth: stacked ? 1 : 0 },
       emphasis: { itemStyle: { opacity: 0.85 } },
       label: capLabels && (!stacked ? series.length === 1 : k === last) ? {
-        show: true, position: 'top', color: t.ink2, fontFamily: t.fontUi, fontSize: 11,
+        show: true, position: 'top', color: t.ink, fontFamily: t.fontUi, fontSize: 12, fontWeight: 700,
         formatter: (p) => fmt(stacked ? totals[p.dataIndex] : p.value),
       } : { show: false },
     })),
@@ -129,7 +130,7 @@ export function lines(t, cats, series, opts = {}) {
       itemStyle: { color: s.color, borderColor: t.surface, borderWidth: 2 },
       symbol: 'circle', symbolSize: 8, showSymbol: true,
       areaStyle: area ? { color: s.color, opacity: 0.1 } : undefined,
-      endLabel: endLabel ? { show: true, color: t.ink2, fontFamily: t.fontUi, fontSize: 11.5, formatter: (p) => fmt(p.value) } : undefined,
+      endLabel: endLabel ? { show: true, color: t.ink, fontFamily: t.fontUi, fontSize: 12, fontWeight: 700, formatter: (p) => fmt(p.value) } : undefined,
       emphasis: { focus: 'none' },
     })),
   };

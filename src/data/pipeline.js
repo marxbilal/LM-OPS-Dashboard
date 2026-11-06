@@ -182,7 +182,7 @@ export function deriveVehicles(V, asOf) {
 // ================================================================== main
 export function buildDataset(input, opts = {}) {
   const t0 = Date.now();
-  const { header, rows, landed } = input;
+  const { header, rows, landed, bills } = input;
   const today = Math.floor((opts.now ?? Date.now()) / DAY);
   const focusYear = opts.focusYear ?? null; // default: year of as-of date
   const errors = [], warnings = [];
@@ -483,6 +483,17 @@ export function buildDataset(input, opts = {}) {
     for (const c of poHdr) if (g.h[c] == null && o[c] != null) g.h[c] = o[c];
     g.rows.push(V[i]);
   });
+  // vendor bills per PO (NetSuite sync only): billed / paid / unpaid in the PO's currency, for every PO from day one
+  let billsByPo = null;
+  if (Array.isArray(bills) && bills.length) {
+    billsByPo = new Map();
+    for (const b of bills) {
+      if (b.po == null || /cancel|reject/i.test(b.status ?? '')) continue;
+      const e = billsByPo.get(String(b.po)) || { billed: 0, paid: 0, unpaid: 0 };
+      e.billed += toNum(b.total) || 0; e.paid += toNum(b.paid) || 0; e.unpaid += toNum(b.unpaid) || 0;
+      billsByPo.set(String(b.po), e);
+    }
+  }
   const P = [];
   for (const [no, g] of pg) {
     const h = g.h, vs = g.rows;
@@ -503,10 +514,20 @@ export function buildDataset(input, opts = {}) {
       : received > 0 && inTransit > 0 ? 'Partly received - balance in transit'
         : received === 0 && inTransit > 0 ? 'In transit - nothing received yet' : 'Received - PO value not fully carded';
     const isOpen = inTransit > 0 ? 'Y' : status.startsWith('Received - PO value') ? 'Check' : 'N';
-    const paid = h['PO Advance Amount'], bal = h['PO Advance Remaining'];
-    const hasPay = paid != null || bal != null;
+    // payments: the vendor bills when synced from NetSuite (every PO), else the PO advance fields (filled only since mid-2026)
+    let paid, bal, payCheck, billed = null, unpaid = null;
+    if (billsByPo) {
+      const b = billsByPo.get(String(h['PO Internal ID'])) || { billed: 0, paid: 0, unpaid: 0 };
+      billed = b.billed; unpaid = b.unpaid; paid = b.paid;
+      bal = total != null ? Math.max(0, total - paid) : unpaid;
+      payCheck = 'OK';
+    } else {
+      paid = h['PO Advance Amount']; bal = h['PO Advance Remaining'];
+      const hasPay = paid != null || bal != null;
+      const s0 = (paid ?? 0) + (bal ?? 0);
+      payCheck = !hasPay ? 'No payment data' : total && Math.abs(s0 - total) > 0.02 * total ? 'Paid + balance differ from PO total' : 'OK';
+    }
     const sumPay = (paid ?? 0) + (bal ?? 0);
-    const payCheck = !hasPay ? 'No payment data' : total && Math.abs(sumPay - total) > 0.02 * total ? 'Paid + balance differ from PO total' : 'OK';
     const fxPay = fxCheck === 'OK' ? fx : 1;
     const recvs = vs.map((v) => v.recv).filter((d) => d != null);
     const poDate = h['PO Date'];
@@ -523,13 +544,15 @@ export function buildDataset(input, opts = {}) {
       firstReceipt: recvs.length ? Math.min(...recvs) : null, lastReceipt: recvs.length ? Math.max(...recvs) : null,
       terms: h['Advance Payment Required'], advanceRequired: h['Advance Amount'], paid, balance: bal,
       paidPct: sumPay > 0 ? (paid ?? 0) / sumPay : null, paidAED: paid != null ? paid * fxPay : null, balanceAED: bal != null ? bal * fxPay : null,
-      lastPayment: h['PO Advance Date'], payCheck,
+      lastPayment: h['PO Advance Date'], payCheck, paySource: billsByPo ? 'bills' : 'po-fields',
+      billed, unpaid, billedAED: billed != null ? billed * fxPay : null, unpaidAED: unpaid != null ? unpaid * fxPay : null,
       approval: h['PO Approval Status'], approvedBy: h['Approved By'], approvedDate: h['Approved Date'],
       approvalLead: h['Approved Date'] != null && poDate != null ? h['Approved Date'] - poDate : null,
       releasedBy: h['Released By'], fxCheck, memo: h['PO Memo'], notes: h['Internal Notes'],
     });
   }
   log.push(['Purchase orders', `${P.length.toLocaleString()} POs built; PO totals converted to AED, 5% VAT detected on AED POs, carded value compared with PO value`]);
+  if (billsByPo) log.push(['Payments', `${bills.length.toLocaleString()} vendor bills against ${billsByPo.size.toLocaleString()} POs - paid and balance per PO come from the bills`]);
 
   // ================================================================ landed-cost split (NetSuite sync only)
   // IBV landed-cost lines -> { cats, byIbv: { 'IBV-03236': [AED per cat] } }. A car's posted landed cost is later

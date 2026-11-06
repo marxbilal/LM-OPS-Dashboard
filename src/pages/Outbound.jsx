@@ -8,9 +8,10 @@ import DataTable from '../components/DataTable.jsx';
 import { hBars, columns, rowsHeight } from '../components/charts.js';
 import { Kpi, ChartCard, Card, Chip } from '../components/ui.jsx';
 import { PageHead, timeAxis, clampRange } from './common.jsx';
-import { int, aed, aedFull, pct, date, dec, yearOf } from '../format.js';
+import { int, aed, pct, date, dec, yearOf } from '../format.js';
 import LandedMix, { lcCatPred } from '../components/LandedMix.jsx';
-import { IMPORT, LCS, groupModels } from '../data/landed.js';
+import ModelCost from '../components/ModelCost.jsx';
+import { IMPORT, LCS } from '../data/landed.js';
 
 const PAID = 'Paid - awaiting delivery', RES = 'Reserved (not fully paid)';
 const UNCLEAR = 'Not set / unclear';
@@ -95,25 +96,9 @@ export default function Outbound() {
   const statusOpt = useMemo(() => hBars(t, status.by.map((s) => s[0]), [{ name: 'Cars dispatched', data: status.by.map((s) => s[1]), color: t.s1 }],
     { catWidth: 170, selected: f.lcs, endText: (i) => `${int(status.by[i][1])} (${pct(status.n ? status.by[i][1] / status.n : 0, 0)})` }), [t, status, f.lcs]);
 
-  const models = useMemo(() => groupModels(dispOf('model')), [V, f, range.from, range.to, flowAx]);
-  const keepPicked = (rows, n) => [...rows.slice(0, n), ...rows.slice(n).filter((m) => f.model.includes(m.key))];
-  const top = keepPicked(models, 15);
-  const costOpt = useMemo(() => hBars(t, top.map((m) => m.key), [
-    { name: 'Avg purchase cost', data: top.map((m) => Math.round(m.avgPP)), color: t.s1 },
-    { name: 'Avg landed cost (where posted)', data: top.map((m) => Math.round(m.avgLC || 0)), color: t.s2 },
-  ], { stacked: true, fmt: (v) => int(v), catWidth: 150, selected: f.model, tipExtra: (i) => [{ name: 'Cars dispatched', value: int(top[i].n) }, { name: 'Landed cost posted on', value: pct(top[i].posted, 0) }], tipFoot: (i) => top[i].brand }), [t, models, f.model]);
-  const lcModels = useMemo(() => keepPicked(models.filter((m) => m.lcN >= 5).sort((a, b) => b.lcPct - a.lcPct), 15), [models, f.model]);
-  const lcOpt = useMemo(() => hBars(t, lcModels.map((m) => m.key), [{ name: 'Landed cost as % of purchase', data: lcModels.map((m) => Math.round(m.lcPct * 1000) / 10), color: t.s2 }],
-    { fmt: (v) => `${dec(v, 1)}%`, axisFmt: (v) => `${v}%`, catWidth: 150, selected: f.model, tipExtra: (i) => [{ name: 'Avg landed cost', value: aedFull(lcModels[i].avgLC) }, { name: 'Cars with landed cost', value: int(lcModels[i].lcN) }] }), [t, lcModels, f.model]);
+  const modelCars = useMemo(() => dispOf('model'), [V, f, range.from, range.to, flowAx]); // cost-by-model charts skip their own pick
   // what the landed cost is made of (the chart skips its own cost-type pick)
   const mixCars = useMemo(() => dispOf('lcCat'), [V, f, range.from, range.to, flowAx]);
-
-  const modelCols = [
-    { key: 'brand', label: 'Brand' }, { key: 'key', label: 'Model' }, { key: 'n', label: 'Cars dispatched', align: 'r', fmt: int },
-    { key: 'avgPP', label: 'Avg purchase (AED)', align: 'r', fmt: int }, { key: 'avgLC', label: 'Avg landed (AED)', align: 'r', fmt: (v) => (v == null ? '-' : int(v)) },
-    { key: 'lcPct', label: 'Landed %', align: 'r', fmt: (v) => pct(v), csv: (r) => (r.lcPct == null ? '' : (r.lcPct * 100).toFixed(1)) },
-    { key: 'avgTotal', label: 'Avg total (AED)', align: 'r', fmt: int }, { key: 'posted', label: 'Landed cost posted', align: 'r', fmt: (v) => pct(v, 0), csv: (r) => (r.posted * 100).toFixed(0) },
-  ];
 
   // destinations: "Not set / unclear" stands for two raw values
   const destVals = (key) => (key === UNCLEAR ? ['Not set', 'Unspecified'] : [key]);
@@ -180,15 +165,7 @@ export default function Outbound() {
         </ChartCard>
       </div>
       <div className="grid-2">
-        <ChartCard title="Cost per car by model" sub={`Top ${top.length} models by cars dispatched · purchase + average posted landed cost`}
-          legend={[{ name: 'Avg purchase cost', color: t.s1 }, { name: 'Avg landed cost (where posted)', color: t.s2 }]}
-          table={{ columns: modelCols, rows: models, csvName: 'dispatched-cost-by-model' }}>
-          <EChart option={costOpt} height={rowsHeight(top.length, 28)} label="Cost per dispatched car by model" onPick={(i) => toggle('model', top[i].key)} />
-        </ChartCard>
-        <ChartCard title="Landed cost as a share of purchase" sub="Models with landed cost posted on 5 or more dispatched cars"
-          table={{ columns: modelCols, rows: lcModels, csvName: 'dispatched-landed-share', search: false }}>
-          <EChart option={lcOpt} height={rowsHeight(lcModels.length, 28)} label="Landed cost as a share of purchase by model" onPick={(i) => toggle('model', lcModels[i].key)} />
-        </ChartCard>
+        <ModelCost cars={modelCars} selected={f.model} onPick={(m) => toggle('model', m)} what="cars dispatched" csvPrefix="dispatched" />
       </div>
       <div className="grid-2">
         <LandedMix cars={mixCars} LC={LC} selected={f.lcCat} onPick={(c) => toggle('lcCat', c)} what="dispatched cars" />

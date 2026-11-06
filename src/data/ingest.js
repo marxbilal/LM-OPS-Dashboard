@@ -23,7 +23,7 @@ async function runHere(message, onProgress) {
   await new Promise((r) => setTimeout(r, 30));
   return message.kind === 'file'
     ? mod.processFile(message.buffer, message.fileName, message.now, onProgress)
-    : mod.processRows(message.header, message.rows, message.now, message.label, onProgress, message.landed);
+    : mod.processRows(message.header, message.rows, message.now, message.label, onProgress, message.extras);
 }
 
 async function run(message, onProgress) {
@@ -85,10 +85,11 @@ export async function pullNetSuite(key, onProgress) {
     }
   }));
   const tables = Object.fromEntries(names.map((n) => [n, pages[n].flat()]));
-  const { header, rows, landed } = mergeTables(tables);
-  return { header, rows, landed, total: rows.length };
+  const { header, rows, extras } = mergeTables(tables);
+  return { header, rows, extras, total: rows.length };
 }
 
-export async function processRows(header, rows, label, onProgress, landed) {
-  return run({ kind: 'rows', header, rows, landed, label, now: Date.now() }, onProgress);
+/** extras: NetSuite-only data beside the rows ({ landed, bills }), see mergeTables. */
+export async function processRows(header, rows, label, onProgress, extras) {
+  return run({ kind: 'rows', header, rows, extras, label, now: Date.now() }, onProgress);
 }

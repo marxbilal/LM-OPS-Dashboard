@@ -17,7 +17,8 @@ const P_FIELDS = ['no', 'internalId', 'date', 'entity', 'branch', 'poLocation', 
   'totalAED', 'vat', 'brands', 'models', 'carded', 'received', 'inTransit', 'inStockNow', 'dispatchedNow', 'shipments',
   'cardedValue', 'coverage', 'notCarded', 'lcPosted', 'status', 'isOpen', 'daysSince', 'receiveBy', 'overdue', 'firstReceipt',
   'lastReceipt', 'terms', 'advanceRequired', 'paid', 'balance', 'paidPct', 'paidAED', 'balanceAED', 'lastPayment', 'payCheck',
-  'approval', 'approvedBy', 'approvedDate', 'approvalLead', 'releasedBy', 'fxCheck', 'memo', 'notes'];
+  'approval', 'approvedBy', 'approvedDate', 'approvalLead', 'releasedBy', 'fxCheck', 'memo', 'notes',
+  'paySource', 'billed', 'unpaid', 'billedAED', 'unpaidAED'];
 
 function packCol(vals) {
   let kind = null;

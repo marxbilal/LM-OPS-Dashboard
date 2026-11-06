@@ -103,6 +103,17 @@ FROM customrecord_cts_ibvlc l
 WHERE l.isinactive = 'F'
 ORDER BY l.id`,
   },
+  // Vendor bills raised against POs (linked on the bill's main line): what has been billed and paid per PO, from day one.
+  // Amounts are in the PO's currency. Pages of 500: a 1,000-row page takes ~11 s.
+  bills: {
+    pageSize: 500,
+    sql: `SELECT b.id, tl.createdfrom AS po, ABS(b.foreigntotal) AS total, b.foreignamountpaid AS paid, b.foreignamountunpaid AS unpaid,
+  BUILTIN.DF(b.status) AS status
+FROM transaction b
+JOIN transactionline tl ON tl.transaction = b.id AND tl.mainline = 'T'
+WHERE b.type = 'VendBill' AND tl.createdfrom IS NOT NULL
+ORDER BY b.id`,
+  },
   // Names for customers, vendors and employees (sales reps, approvers): "<code> <name>" like the export
   entity: {
     pageSize: 1000,
@@ -129,7 +140,8 @@ const byId = (rows) => new Map((rows || []).map((r) => [String(r.id), r]));
 
 /**
  * Joins the pulled tables into the export's shape: { header, rows } with one row per vehicle card,
- * plus landed: the IBV landed-cost lines [{ ibv, cat, aed }] (not part of the export).
+ * plus extras that the export doesn't carry: landed (IBV landed-cost lines [{ ibv, cat, aed }]) and
+ * bills (vendor bills per PO [{ po, total, paid, unpaid, status }]).
  */
 export function mergeTables(t) {
   const vst = byId(t.vst), vo = byId(t.vo), ibv = byId(t.ibv), ibvi = byId(t.ibvi), po = byId(t.po), ent = byId(t.entity);
@@ -157,5 +169,6 @@ export function mergeTables(t) {
     ].map((v) => (v === undefined ? null : v)));
   }
   const landed = (t.ibvlc || []).map((l) => ({ ibv: l.ibv ?? null, cat: l.cat ?? null, aed: l.aed ?? null }));
-  return { header: HEADER, rows, landed };
+  const bills = (t.bills || []).map((b) => ({ po: b.po ?? null, total: b.total ?? null, paid: b.paid ?? null, unpaid: b.unpaid ?? null, status: b.status ?? null }));
+  return { header: HEADER, rows, extras: { landed, bills } };
 }

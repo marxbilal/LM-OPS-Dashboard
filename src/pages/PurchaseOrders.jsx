@@ -10,6 +10,11 @@ import { Kpi, ChartCard, Banner, Card, Chip } from '../components/ui.jsx';
 import { PageHead, timeAxis, clampRange, dayLabel } from './common.jsx';
 import { int, aed, aedFull, pct, date, compact, yearOf, monthKey, monthLabel } from '../format.js';
 
+// table order: partly received first, then in transit, then the rest
+const STATUS_RANK = {
+  'Partly received - balance in transit': 0, 'In transit - nothing received yet': 1,
+  'Received - PO value not fully carded': 2, 'Fully received': 3,
+};
 const STATUS_TONE = {
   'Fully received': 'good', 'Partly received - balance in transit': 'brand',
   'In transit - nothing received yet': 'warn', 'Received - PO value not fully carded': 'neutral',
@@ -36,7 +41,7 @@ export default function PurchaseOrders() {
     entity: options(P, (p) => p.entity, { sortBy: 'name' }),
     vendor: options(P, (p) => p.vendor),
     route: options(P, (p) => p.route),
-    status: ['Fully received', 'Partly received - balance in transit', 'In transit - nothing received yet', 'Received - PO value not fully carded'],
+    status: Object.keys(STATUS_RANK),
     brand: options(P.flatMap((p) => p.brands || []), (b) => b),
     years: [...new Set([yearOf(asOf), ...P.map((p) => yearOf(p.date)).filter((y) => y != null)])].sort((a, b) => b - a),
   }), [P, asOf]);
@@ -50,6 +55,7 @@ export default function PurchaseOrders() {
   // POs dated in the PO-date filter, every selection applied except `skip` (a chart's own dimension)
   const inPeriod = (skip) => applyPreds(P, preds, skip).filter((p) => ymMatch(p.date, f.period));
   const pos = useMemo(() => inPeriod(), [P, f]);
+  const posByDate = useMemo(() => [...pos].sort((a, b) => (b.date ?? -1e9) - (a.date ?? -1e9)), [pos]);
   const openAll = useMemo(() => applyPreds(P, preds).filter((p) => p.isOpen !== 'N'), [P, f]);
 
   const k = useMemo(() => {
@@ -62,6 +68,7 @@ export default function PurchaseOrders() {
       overdue: open.filter((p) => p.overdue).length, openTransit: sum(open, (p) => p.inTransit),
       payN: withPay.length, paid: sum(withPay, (p) => p.paidAED), balance: sum(withPay, (p) => p.balanceAED),
       inconsistent: withPay.filter((p) => p.payCheck !== 'OK').length,
+      fromBills: pos.some((p) => p.paySource === 'bills'), unpaid: sum(withPay, (p) => p.unpaidAED),
     };
   }, [pos, openAll]);
 
@@ -138,7 +145,7 @@ export default function PurchaseOrders() {
     { key: 'received', label: 'Received', align: 'r', fmt: int },
     { key: 'inTransit', label: 'In transit', align: 'r', fmt: int },
     { key: 'notCarded', label: 'Not yet on cards (AED)', align: 'r', fmt: (v) => (v ? int(v) : '-') },
-    { key: 'status', label: 'Status', fmt: (v) => <Chip tone={STATUS_TONE[v] || 'neutral'} icon={false}>{v}</Chip>, text: (r) => r.status },
+    { key: 'status', label: 'Status', fmt: (v) => <Chip tone={STATUS_TONE[v] || 'neutral'} icon={false}>{v}</Chip>, text: (r) => r.status, sort: (r) => STATUS_RANK[r.status] ?? 9 },
     { key: 'daysSince', label: 'Days since PO', align: 'r', fmt: int },
     { key: 'receiveBy', label: 'Receive by', fmt: (v, r) => (r.overdue ? <Chip tone="critical">{date(v)}</Chip> : date(v)), csv: (r) => date(r.receiveBy) },
     { key: 'paidPct', label: 'Paid', align: 'r', fmt: (v, r) => (r.payCheck === 'No payment data' ? '-' : pct(v, 0)), csv: (r) => (r.paidPct == null ? '' : (r.paidPct * 100).toFixed(1)) },
@@ -186,7 +193,9 @@ export default function PurchaseOrders() {
           <EChart option={openOpt} height={rowsHeight(openList.length, 26)} label="Open purchase orders" onPick={(i) => toggle('po', openList[i].no)} />
         </ChartCard>
         <div style={{ display: 'grid', gap: 16, alignContent: 'start' }}>
-          <Card title="Payments against these POs" sub={`Based on ${int(k.payN)} of ${int(k.n)} POs that carry paid / balance amounts (recorded since Jun 2026)`}>
+          <Card title="Payments against these POs" sub={k.fromBills
+            ? `All ${int(k.n)} POs in the filter, from the vendor bills in NetSuite · paid = bill payments, balance = PO value not yet paid`
+            : `Based on ${int(k.payN)} of ${int(k.n)} POs that carry the PO payment fields (filled in NetSuite only from mid-2026) - run NetSuite Data Sync to use the vendor bills for every PO`}>
             <div style={{ padding: '6px 6px 4px', display: 'grid', gap: 10 }}>
               <div className="meter" style={{ height: 12 }} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={paidShare != null ? Math.round(paidShare * 100) : 0} aria-label="Share paid">
                 <i style={{ width: `${(paidShare || 0) * 100}%` }} />
@@ -195,6 +204,11 @@ export default function PurchaseOrders() {
                 <span><b className="num">{aed(k.paid)}</b> <span className="muted">paid ({pct(paidShare, 0)})</span></span>
                 <span><b className="num">{aed(k.balance)}</b> <span className="muted">balance to pay</span></span>
               </div>
+              {k.fromBills && k.balance > 0 && (
+                <span className="muted" style={{ fontSize: 12.5 }}>
+                  Of the balance: <b className="num">{aed(k.unpaid)}</b> billed, not yet paid · <b className="num">{aed(Math.max(0, k.balance - k.unpaid))}</b> not yet billed
+                </span>
+              )}
               {k.inconsistent > 0 && <Chip tone="warn">{int(k.inconsistent)} POs where paid + balance differ from the PO total</Chip>}
             </div>
           </Card>
@@ -208,8 +222,9 @@ export default function PurchaseOrders() {
           </ChartCard>
         </div>
       </div>
-      <Card title="Purchase orders" sub="Click a column to sort. Dates and amounts download as shown.">
-        <DataTable columns={poCols} rows={pos} csvName="purchase-orders" initialSort={{ key: 'date', dir: -1 }} />
+      <Card title="Purchase orders" sub="Partly received first, then in transit, then the rest (newest first within each). Click a column to sort; dates and amounts download as shown.">
+        <DataTable columns={poCols} rows={posByDate} csvName="purchase-orders" initialSort={{ key: 'status', dir: 1 }}
+          filters={[{ key: 'status', label: 'Status', options: opts.status }]} />
       </Card>
     </>
   );

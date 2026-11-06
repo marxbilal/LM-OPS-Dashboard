@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DataContext, ROUTES } from './context.js';
 import { loadDataset } from './data/store.js';
 import { unpackDataset } from './data/pack.js';
-import FlowRibbon from './components/FlowRibbon.jsx';
 import { VehicleSearch, VehicleDrawer } from './components/VehicleLookup.jsx';
 import { Empty } from './components/ui.jsx';
 import { date } from './format.js';
@@ -87,7 +86,6 @@ export default function App() {
             {state.error ? `${state.error} ` : ''}Load the NetSuite vehicle export on the Upload Data page (key required). Every page fills in as soon as it is accepted.
           </Empty>
         )}
-        {state.ds && route !== 'upload' && <FlowRibbon route={route} go={go} />}
         {(state.ds || route === 'upload') && state.status !== 'loading' && <Page />}
         {state.ds && route !== 'upload' && (
           <p className="muted" style={{ margin: 0, fontSize: 12 }}>

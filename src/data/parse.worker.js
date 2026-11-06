@@ -32,9 +32,9 @@ export function processFile(buffer, fileName, now, progress = () => {}) {
   return { ok: true, packed: packDataset(ds) };
 }
 
-export function processRows(header, rows, now, label, progress = () => {}, landed = null) {
+export function processRows(header, rows, now, label, progress = () => {}, extras = {}) {
   progress('Cleaning and validating', 0.6);
-  const ds = buildDataset({ header, rows, landed }, { now, meta: { fileName: label, sheetName: 'NetSuite', source: 'netsuite' } });
+  const ds = buildDataset({ header, rows, landed: extras?.landed, bills: extras?.bills }, { now, meta: { fileName: label, sheetName: 'NetSuite', source: 'netsuite' } });
   if (!ds.validation.accepted) return { ok: false, validation: ds.validation };
   progress('Packing', 0.85);
   return { ok: true, packed: packDataset(ds) };
@@ -46,7 +46,7 @@ if (inWorker) self.onmessage = (e) => {
   try {
     const out = m.kind === 'file'
       ? processFile(m.buffer, m.fileName, m.now, say)
-      : processRows(m.header, m.rows, m.now, m.label, say, m.landed);
+      : processRows(m.header, m.rows, m.now, m.label, say, m.extras);
     self.postMessage({ type: 'done', ...out });
   } catch (err) {
     self.postMessage({ type: 'error', message: err?.message || String(err) });

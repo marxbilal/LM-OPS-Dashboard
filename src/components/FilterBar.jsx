@@ -20,8 +20,8 @@ function usePopover() {
   return [open, setOpen, ref];
 }
 
-/** Searchable checklist; value is the list of picked values, [] = all. */
-function MultiSelect({ id, label, value = [], options, allLabel = 'All', onChange, active }) {
+/** Searchable checklist; value is the list of picked values, [] = all. Also used for table filters (DataTable). */
+export function MultiSelect({ id, label, value = [], options, allLabel = 'All', onChange, active }) {
   const [open, setOpen, ref] = usePopover();
   const [q, setQ] = useState('');
   const sel = new Set(value);
