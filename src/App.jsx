@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DataContext, ROUTES } from './context.js';
-import { loadDataset } from './data/store.js';
+import { loadDataset, loadSettings, DEFAULT_SETTINGS } from './data/store.js';
 import { unpackDataset } from './data/pack.js';
 import { VehicleSearch, VehicleDrawer } from './components/VehicleLookup.jsx';
 import { Empty } from './components/ui.jsx';
@@ -11,6 +11,8 @@ import Inventory from './pages/Inventory.jsx';
 import Outbound from './pages/Outbound.jsx';
 import Costs from './pages/Costs.jsx';
 import Upload from './pages/Upload.jsx';
+import SignIn from './components/SignIn.jsx';
+import { getSession, signOut } from './data/auth.js';
 
 const PAGES = { po: PurchaseOrders, inbound: Inbound, inventory: Inventory, outbound: Outbound, costs: Costs, upload: Upload };
 
@@ -32,11 +34,23 @@ function useHashRoute() {
   return [route, go];
 }
 
+/** Nothing of the dashboard (or its data) loads until the user has signed in. */
 export default function App() {
+  const [session, setSession] = useState(getSession);
+  if (!session) return <SignIn onSignedIn={setSession} />;
+  return <Dashboard session={session} />;
+}
+
+function Dashboard({ session }) {
   const [route, go] = useHashRoute();
   const [state, setState] = useState({ status: 'loading' });
   const [vehicle, setVehicle] = useState(null);
   const [toast, setToast] = useState(null);
+  const [settings, setSettings] = useState({ ...DEFAULT_SETTINGS, shared: false });
+  useEffect(() => { loadSettings().then(setSettings).catch(() => {}); }, []);
+  const hidden = settings.hiddenPages || [];
+  // a hidden page's URL (e.g. #costs) shows Purchase Orders instead
+  useEffect(() => { if (hidden.includes(route)) go('po'); }, [route, hidden.join(','), go]);
 
   useEffect(() => {
     let alive = true;
@@ -58,10 +72,10 @@ export default function App() {
   const ctx = useMemo(() => ({
     ds: state.ds, status: state.status, source: state.source, shared: state.shared,
     apply: (packed, source) => setState((s) => ({ ...s, status: 'ready', ds: unpackDataset(packed), source })),
-    toast: setToast, openVehicle: setVehicle, go,
-  }), [state, go]);
+    toast: setToast, openVehicle: setVehicle, go, settings, setSettings,
+  }), [state, go, settings]);
 
-  const Page = PAGES[route];
+  const Page = PAGES[hidden.includes(route) ? 'po' : route];
   return (
     <DataContext.Provider value={ctx}>
       <header className="nav">
@@ -70,10 +84,11 @@ export default function App() {
             <b>Legend Motors</b><span>Supply Chain &amp; Operations</span>
           </a>
           <nav className="tabs" aria-label="Pages">
-            {ROUTES.map((r) => <a key={r.id} className="tab" href={`#${r.id}`} aria-current={route === r.id ? 'page' : undefined}>{r.label}</a>)}
+            {ROUTES.filter((r) => !hidden.includes(r.id)).map((r) => <a key={r.id} className="tab" href={`#${r.id}`} aria-current={route === r.id ? 'page' : undefined}>{r.label}</a>)}
           </nav>
           <div className="nav-tools">
             {state.ds && <VehicleSearch onOpen={setVehicle} />}
+            <button type="button" className="nav-signout" onClick={signOut} title={`Signed in as ${session.email}`}>Sign out</button>
             <a className="btn-upload" href="#upload" aria-current={route === 'upload' ? 'page' : undefined}>Upload Data</a>
           </div>
         </div>

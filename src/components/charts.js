@@ -96,7 +96,7 @@ export function columns(t, cats, series, opts = {}) {
     }),
     series: series.map((s, k) => ({
       type: 'bar', name: s.name, data: dim(s.data), stack: stacked ? 'a' : undefined,
-      barMaxWidth: 24, barCategoryGap: '36%', barGap: '12%',
+      barMaxWidth: 40, barCategoryGap: '26%', barGap: '12%',
       itemStyle: { color: s.color, borderRadius: !stacked || k === last ? [4, 4, 0, 0] : 0, borderColor: t.surface, borderWidth: stacked ? 1 : 0 },
       emphasis: { itemStyle: { opacity: 0.85 } },
       label: capLabels && (!stacked ? series.length === 1 : k === last) ? {

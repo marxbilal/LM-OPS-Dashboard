@@ -9,9 +9,8 @@ import { hBars, columns, rowsHeight } from '../components/charts.js';
 import { Kpi, ChartCard, Card, Chip } from '../components/ui.jsx';
 import { PageHead, timeAxis, clampRange } from './common.jsx';
 import { int, aed, pct, date, dec, yearOf } from '../format.js';
-import LandedMix, { lcCatPred } from '../components/LandedMix.jsx';
 import ModelCost from '../components/ModelCost.jsx';
-import { IMPORT, LCS } from '../data/landed.js';
+import { IMPORT } from '../data/landed.js';
 
 const PAID = 'Paid - awaiting delivery', RES = 'Reserved (not fully paid)';
 const UNCLEAR = 'Not set / unclear';
@@ -19,10 +18,10 @@ const UNCLEAR = 'Not set / unclear';
 export default function Outbound() {
   const { ds, openVehicle } = useData();
   const t = useChartTheme();
-  const { V, meta, LC } = ds;
+  const { V, meta } = ds;
   const asOf = meta.asOf;
-  // outT (dispatch day/week/month), model, lcs (landed cost status) and lcCat (landed cost category) are chart-click selections
-  const defaults = { period: [String(yearOf(asOf))], entity: [], brand: [], dest: [], comm: [], outT: [], model: [], lcs: [], lcCat: [], kpi: [] };
+  // outT (dispatch day/week/month) and model are chart-click selections
+  const defaults = { period: [String(yearOf(asOf))], entity: [], brand: [], dest: [], comm: [], outT: [], model: [], kpi: [] };
   const [f, set, reset, toggle] = useFilters(defaults);
   const setF = (id, v) => { set(id, v); if (id === 'period') set('outT', []); }; // buckets depend on the period
   const [grain, setGrainRaw] = useState('week');
@@ -44,8 +43,7 @@ export default function Outbound() {
   const range = ymRange(f.period); // span of the picked years/months, for the chart axis
   const keepPreds = {
     entity: pick(f.entity, (v) => v.entity), brand: pick(f.brand, (v) => v.brand), dest: pick(f.dest, (v) => v.destC),
-    model: pick(f.model, (v) => v.model ?? 'Unknown'), lcs: pick(f.lcs, (v) => v.lcs), kpi: kpiPred(f, KPI_CARDS),
-    lcCat: lcCatPred(f.lcCat, LC),
+    model: pick(f.model, (v) => v.model ?? 'Unknown'), kpi: kpiPred(f, KPI_CARDS),
   };
   // waiting cars: waiting status applies here only; dispatched cars: dispatch period and bucket apply there only
   const open = useMemo(() => applyPreds(V.filter((v) => v.openVso), { ...keepPreds, comm: pick(f.comm, (v) => v.comm) }), [V, f]);
@@ -88,17 +86,7 @@ export default function Outbound() {
   const flowOpt = useMemo(() => columns(t, flow.ax.keys, [{ name: 'Cars dispatched', data: flow.n, color: t.s1 }],
     { xFmt: flow.ax.label, capLabels: flow.ax.keys.length <= 16, selected: f.outT }), [t, flow, f.outT]);
 
-  // landed cost of the cars dispatched in the period (same rules as the Costs page)
-  const status = useMemo(() => {
-    const rows = dispOf('lcs');
-    return { n: rows.length, by: LCS.map((s) => [s, rows.filter((v) => v.lcs === s).length]) };
-  }, [V, f, range.from, range.to, flowAx]);
-  const statusOpt = useMemo(() => hBars(t, status.by.map((s) => s[0]), [{ name: 'Cars dispatched', data: status.by.map((s) => s[1]), color: t.s1 }],
-    { catWidth: 170, selected: f.lcs, endText: (i) => `${int(status.by[i][1])} (${pct(status.n ? status.by[i][1] / status.n : 0, 0)})` }), [t, status, f.lcs]);
-
   const modelCars = useMemo(() => dispOf('model'), [V, f, range.from, range.to, flowAx]); // cost-by-model charts skip their own pick
-  // what the landed cost is made of (the chart skips its own cost-type pick)
-  const mixCars = useMemo(() => dispOf('lcCat'), [V, f, range.from, range.to, flowAx]);
 
   // destinations: "Not set / unclear" stands for two raw values
   const destVals = (key) => (key === UNCLEAR ? ['Not set', 'Unspecified'] : [key]);
@@ -134,7 +122,7 @@ export default function Outbound() {
         { id: 'dest', label: 'Destination', options: opts.dest },
         { id: 'comm', label: 'Waiting status', options: opts.comm },
       ]} picks={[
-        { id: 'outT', label: 'Dispatched', fmt: flowAx.label }, { id: 'model', label: 'Model' }, { id: 'lcs', label: 'Landed cost' }, { id: 'lcCat', label: 'Cost type' },
+        { id: 'outT', label: 'Dispatched', fmt: flowAx.label }, { id: 'model', label: 'Model' },
         { id: 'kpi', label: 'Card', fmt: (id) => KPI_CARDS[id]?.label ?? id },
       ]} />
       <div className="kpis">
@@ -149,26 +137,17 @@ export default function Outbound() {
         <Kpi {...kpiClick(f, set, 'postedAll')} label="Landed cost posted" value={pct(k.disp ? k.postedAll / k.disp : null, 0)}
           sub={`${int(k.postedAll)} of ${int(k.disp)} dispatched cars`} />
       </div>
+      <ChartCard title={`Cars dispatched per ${flow.ax.unit}`} sub="Completed dispatches by out date. Planned dispatches need a planned date in NetSuite."
+        tools={<div className="seg" role="group" aria-label="Grain">
+          <button type="button" aria-pressed={grain === 'day'} onClick={() => setGrain('day')}>Day</button>
+          <button type="button" aria-pressed={grain === 'week'} onClick={() => setGrain('week')}>Week</button>
+          <button type="button" aria-pressed={grain === 'month'} onClick={() => setGrain('month')}>Month</button>
+        </div>}
+        table={{ columns: [{ key: 'p', label: 'Period' }, { key: 'n', label: 'Cars dispatched', align: 'r', fmt: int }], rows: flow.ax.keys.map((key, i) => ({ __key: key, p: flow.ax.label(key), n: flow.n[i] })), search: false, csvName: 'dispatches' }}>
+        <EChart option={flowOpt} height={300} label="Cars dispatched over time" onPick={(i) => toggle('outT', flow.ax.keys[i])} />
+      </ChartCard>
       <div className="grid-2">
-        <ChartCard title={`Cars dispatched per ${flow.ax.unit}`} sub="Completed dispatches by out date. Planned dispatches need a planned date in NetSuite."
-          tools={<div className="seg" role="group" aria-label="Grain">
-            <button type="button" aria-pressed={grain === 'day'} onClick={() => setGrain('day')}>Day</button>
-            <button type="button" aria-pressed={grain === 'week'} onClick={() => setGrain('week')}>Week</button>
-            <button type="button" aria-pressed={grain === 'month'} onClick={() => setGrain('month')}>Month</button>
-          </div>}
-          table={{ columns: [{ key: 'p', label: 'Period' }, { key: 'n', label: 'Cars dispatched', align: 'r', fmt: int }], rows: flow.ax.keys.map((key, i) => ({ __key: key, p: flow.ax.label(key), n: flow.n[i] })), search: false, csvName: 'dispatches' }}>
-          <EChart option={flowOpt} height={300} label="Cars dispatched over time" onPick={(i) => toggle('outT', flow.ax.keys[i])} />
-        </ChartCard>
-        <ChartCard title="Landed cost status" sub={`Cars dispatched in the period · ${int(status.n)} cars`}
-          table={{ columns: [{ key: 's', label: 'Landed cost status' }, { key: 'n', label: 'Cars dispatched', align: 'r', fmt: int }], rows: status.by.map(([s, n]) => ({ s, n, __key: s })), search: false }}>
-          <EChart option={statusOpt} height={rowsHeight(status.by.length, 40)} label="Dispatched cars by landed cost status" onPick={(i) => toggle('lcs', status.by[i][0])} />
-        </ChartCard>
-      </div>
-      <div className="grid-2">
-        <ModelCost cars={modelCars} selected={f.model} onPick={(m) => toggle('model', m)} what="cars dispatched" csvPrefix="dispatched" />
-      </div>
-      <div className="grid-2">
-        <LandedMix cars={mixCars} LC={LC} selected={f.lcCat} onPick={(c) => toggle('lcCat', c)} what="dispatched cars" />
+        <ModelCost cars={modelCars} selected={f.model} onPick={(m) => toggle('model', m)} what="cars dispatched" csvPrefix="dispatched" share={false} />
         <ChartCard title="Dispatched, by destination" sub="Cars dispatched in the period"
           table={{ columns: [{ key: 'k', label: 'Destination' }, { key: 'n', label: 'Cars', align: 'r', fmt: int }], rows: dispDest.map(([k2, n]) => ({ k: k2, n, __key: k2 })), search: false }}>
           <EChart option={dispDestOpt} height={rowsHeight(dispDest.length, 26)} label="Dispatched cars by destination" onPick={(i) => toggle('dest', destVals(dispDest[i][0]))} />

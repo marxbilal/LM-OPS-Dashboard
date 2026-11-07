@@ -1,6 +1,7 @@
 // Main-thread entry points for loading new data: a dropped file or the NetSuite sync.
 import ParseWorker from './parse.worker.js?worker&inline';
 import { TABLES, mergeTables } from './netsuite.js';
+import { authFetch } from './auth.js';
 
 function runInWorker(message, onProgress) {
   return new Promise((resolve, reject) => {
@@ -51,7 +52,7 @@ async function fetchPage(key, table, page) {
   for (let attempt = 1; ; attempt++) {
     let r;
     try {
-      r = await fetch(`./api/netsuite-sync?table=${table}&page=${page}`, { headers: { 'x-upload-key': key }, cache: 'no-store' });
+      r = await authFetch(`./api/netsuite-sync?table=${table}&page=${page}`, { headers: { 'x-upload-key': key }, cache: 'no-store' });
     } catch {
       if (attempt < 3) { await new Promise((res) => setTimeout(res, 1500 * attempt)); continue; }
       throw new Error(NOT_CONNECTED);

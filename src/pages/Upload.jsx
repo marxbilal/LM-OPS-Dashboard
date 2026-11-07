@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useData } from '../context.js';
 import { processUpload, pullNetSuite, processRows, MAX_MB } from '../data/ingest.js';
-import { saveDataset } from '../data/store.js';
+import { saveDataset, saveSettings } from '../data/store.js';
 import { saveFile, toCSV } from '../components/download.js';
 import { Banner, Card, Chip, Icon } from '../components/ui.jsx';
 import { int, pct, date, dateTime, timeAgo, plural } from '../format.js';
@@ -48,7 +48,19 @@ function Check({ tone = 'good', title, children }) {
 }
 
 export default function Upload() {
-  const { ds, source, apply, toast } = useData();
+  const { ds, source, apply, toast, settings, setSettings } = useData();
+  const [savingPages, setSavingPages] = useState(false);
+  const costsHidden = (settings?.hiddenPages || []).includes('costs');
+  const toggleCosts = async () => {
+    const cur = settings?.hiddenPages || [];
+    const next = costsHidden ? cur.filter((p) => p !== 'costs') : [...cur, 'costs'];
+    setSavingPages(true);
+    try {
+      const saved = await saveSettings({ hiddenPages: next }, key);
+      setSettings((s) => ({ ...s, ...saved }));
+      toast(costsHidden ? 'Costs page is shown again.' : 'Costs page is hidden.');
+    } catch (e) { toast(e.message); } finally { setSavingPages(false); }
+  };
   const [key, setKey] = useState(getKey);
   const [busy, setBusy] = useState(null);
   const [result, setResult] = useState(null);
@@ -150,6 +162,12 @@ export default function Upload() {
           ) : <p className="muted" style={{ padding: '4px 6px' }}>No dataset loaded yet.</p>}
         </Card>
       </div>
+      <Card title="Costs page" sub={costsHidden ? 'Hidden from the menu for everyone' + (settings?.shared ? '' : ' (this browser only - the site has no shared store)') : 'Shown in the menu for everyone' + (settings?.shared ? '' : ' (this browser only)')}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '4px 6px 8px' }}>
+          <Chip tone={costsHidden ? 'neutral' : 'good'} icon={false}>{costsHidden ? 'Hidden' : 'Visible'}</Chip>
+          <button type="button" className="btn" onClick={toggleCosts} disabled={savingPages}>{savingPages ? 'Saving...' : costsHidden ? 'Show Costs page' : 'Hide Costs page'}</button>
+        </div>
+      </Card>
 
       {result?.ok && (
         <Banner tone="good" title="Upload accepted">

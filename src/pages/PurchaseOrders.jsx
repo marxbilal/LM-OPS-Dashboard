@@ -192,36 +192,34 @@ export default function PurchaseOrders() {
           table={{ columns: poCols.filter((c) => ['no', 'date', 'vendor', 'carded', 'received', 'inTransit', 'daysSince', 'receiveBy'].includes(c.key)), rows: openList, csvName: 'open-pos', search: false }}>
           <EChart option={openOpt} height={rowsHeight(openList.length, 26)} label="Open purchase orders" onPick={(i) => toggle('po', openList[i].no)} />
         </ChartCard>
-        <div style={{ display: 'grid', gap: 16, alignContent: 'start' }}>
-          <Card title="Payments against these POs" sub={k.fromBills
-            ? `All ${int(k.n)} POs in the filter, from the vendor bills in NetSuite · paid = bill payments, balance = PO value not yet paid`
-            : `Based on ${int(k.payN)} of ${int(k.n)} POs that carry the PO payment fields (filled in NetSuite only from mid-2026) - run NetSuite Data Sync to use the vendor bills for every PO`}>
-            <div style={{ padding: '6px 6px 4px', display: 'grid', gap: 10 }}>
-              <div className="meter" style={{ height: 12 }} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={paidShare != null ? Math.round(paidShare * 100) : 0} aria-label="Share paid">
-                <i style={{ width: `${(paidShare || 0) * 100}%` }} />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                <span><b className="num">{aed(k.paid)}</b> <span className="muted">paid ({pct(paidShare, 0)})</span></span>
-                <span><b className="num">{aed(k.balance)}</b> <span className="muted">balance to pay</span></span>
-              </div>
-              {k.fromBills && k.balance > 0 && (
-                <span className="muted" style={{ fontSize: 12.5 }}>
-                  Of the balance: <b className="num">{aed(k.unpaid)}</b> billed, not yet paid · <b className="num">{aed(Math.max(0, k.balance - k.unpaid))}</b> not yet billed
-                </span>
-              )}
-              {k.inconsistent > 0 && <Chip tone="warn">{int(k.inconsistent)} POs where paid + balance differ from the PO total</Chip>}
-            </div>
-          </Card>
-          <ChartCard title="Top vendors by PO value" sub="POs in the selected period"
-            table={{ columns: [
-              { key: 'vendor', label: 'Vendor', wrap: true }, { key: 'pos', label: 'POs', align: 'r', fmt: int },
-              { key: 'value', label: 'PO value (AED)', align: 'r', fmt: int }, { key: 'carded', label: 'Cars', align: 'r', fmt: int },
-              { key: 'received', label: 'Received', align: 'r', fmt: int }, { key: 'transit', label: 'In transit', align: 'r', fmt: int },
-            ], rows: vendors.map((v) => ({ ...v, __key: v.vendor })), csvName: 'vendors' }}>
-            <EChart option={vendorOpt} height={rowsHeight(topV.length, 28)} label="Top vendors by PO value" onPick={(i) => toggle('vendor', topV[i].vendor)} />
-          </ChartCard>
-        </div>
+        <ChartCard title="Top vendors by PO value" sub="POs in the selected period"
+          table={{ columns: [
+            { key: 'vendor', label: 'Vendor', wrap: true }, { key: 'pos', label: 'POs', align: 'r', fmt: int },
+            { key: 'value', label: 'PO value (AED)', align: 'r', fmt: int }, { key: 'carded', label: 'Cars', align: 'r', fmt: int },
+            { key: 'received', label: 'Received', align: 'r', fmt: int }, { key: 'transit', label: 'In transit', align: 'r', fmt: int },
+          ], rows: vendors.map((v) => ({ ...v, __key: v.vendor })), csvName: 'vendors' }}>
+          <EChart option={vendorOpt} height={rowsHeight(topV.length, 28)} label="Top vendors by PO value" onPick={(i) => toggle('vendor', topV[i].vendor)} />
+        </ChartCard>
       </div>
+      <Card title="Payments against these POs" sub={k.fromBills
+        ? `All ${int(k.n)} POs in the filter, from the vendor bills in NetSuite · paid = bill payments, balance = PO value not yet paid`
+        : `Based on ${int(k.payN)} of ${int(k.n)} POs that carry the PO payment fields (filled in NetSuite only from mid-2026) - run NetSuite Data Sync to use the vendor bills for every PO`}>
+        <div style={{ padding: '6px 6px 4px', display: 'grid', gap: 10 }}>
+          <div className="meter" style={{ height: 12 }} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={paidShare != null ? Math.round(paidShare * 100) : 0} aria-label="Share paid">
+            <i style={{ width: `${(paidShare || 0) * 100}%` }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <span><b className="num">{aed(k.paid)}</b> <span className="muted">paid ({pct(paidShare, 0)})</span></span>
+            <span><b className="num">{aed(k.balance)}</b> <span className="muted">balance to pay</span></span>
+          </div>
+          {k.fromBills && k.balance > 0 && (
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              Of the balance: <b className="num">{aed(k.unpaid)}</b> billed, not yet paid · <b className="num">{aed(Math.max(0, k.balance - k.unpaid))}</b> not yet billed
+            </span>
+          )}
+          {k.inconsistent > 0 && <Chip tone="warn">{int(k.inconsistent)} POs where paid + balance differ from the PO total</Chip>}
+        </div>
+      </Card>
       <Card title="Purchase orders" sub="Partly received first, then in transit, then the rest (newest first within each). Click a column to sort; dates and amounts download as shown.">
         <DataTable columns={poCols} rows={posByDate} csvName="purchase-orders" initialSort={{ key: 'status', dir: 1 }}
           filters={[{ key: 'status', label: 'Status', options: opts.status }]} />

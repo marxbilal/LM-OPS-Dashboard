@@ -148,7 +148,7 @@ export default function Costs() {
         <LandedMix cars={mixCars} LC={LC} selected={f.lcCat} onPick={(c) => toggle('lcCat', c)} what="cars on these POs" />
       </div>
       <ChartCard title="Landed cost posting by PO month" sub="Share of received imported cars with landed cost posted"
-        table={{ columns: [{ key: 'm', label: 'PO month' }, { key: 'n', label: 'Imported cars received', align: 'r', fmt: int }, { key: 'p', label: 'With landed cost', align: 'r', fmt: int }, { key: 's', label: 'Share', align: 'r', fmt: (v) => (v == null ? '-' : `${dec(v, 1)}%`) }],
+        table={{ columns: [{ key: 'm', label: 'PO month' }, { key: 'n', label: 'Imported cars received', align: 'r', fmt: int }, { key: 'p', label: 'With landed cost', align: 'r', fmt: int }, { key: 's', label: 'Share', align: 'r', fmt: (v) => (v == null ? '-' : `${dec(v, 1)}%`), total: (rows) => { const n = sum(rows, (r) => r.n); return n ? `${dec((sum(rows, (r) => r.p) / n) * 100, 1)}%` : '-'; } }],
           rows: cov.ax.keys.map((key, i) => ({ __key: key, m: cov.ax.label(key), n: cov.n[i], p: cov.p[i], s: cov.share[i] })), search: false }}>
         <EChart option={covOpt} height={260} label="Landed cost posting by PO month" onPick={(i) => toggle('poM', cov.ax.keys[i])} />
       </ChartCard>

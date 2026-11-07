@@ -77,7 +77,7 @@ export function ChartCard({ title, sub, legend, table, children, tools, foot, cl
         </div>
       </header>
       <div className="card-body">
-        {view === 'chart' || !table ? <><Legend items={legend} />{children}</> : <DataTable {...table} maxHeight={420} />}
+        {view === 'chart' || !table ? <><Legend items={legend} />{children}</> : <DataTable totals="auto" {...table} maxHeight={420} />}
       </div>
       {foot && <div className="card-foot">{foot}</div>}
     </section>

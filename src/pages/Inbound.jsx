@@ -9,7 +9,8 @@ import { hBars, columns, lines, rowsHeight } from '../components/charts.js';
 import { Kpi, ChartCard, Banner, Card, Chip } from '../components/ui.jsx';
 import ModelCost from '../components/ModelCost.jsx';
 import LandedMix, { lcCatPred } from '../components/LandedMix.jsx';
-import { PageHead, timeAxis, clampRange, dayLabel, ETA_TONE, ETA_LABEL } from './common.jsx';
+import { LCS } from '../data/landed.js';
+import { PageHead, timeAxis, clampRange, ETA_TONE, ETA_LABEL } from './common.jsx';
 import { int, aed, aedFull, pct, date, dec, yearOf } from '../format.js';
 
 const NO_CODE = 'No model code';
@@ -19,8 +20,8 @@ export default function Inbound() {
   const t = useChartTheme();
   const { S, V, meta, LC } = ds;
   const asOf = meta.asOf;
-  // recvT (receiving week/month), ship, mcode (model code) and model are chart-click selections (no dropdown)
-  const defaults = { period: [String(yearOf(asOf))], entity: [], mode: [], route: [], brand: [], recvT: [], ship: [], kpi: [], mcode: [], model: [], lcCat: [] };
+  // recvT (receiving week/month), mcode (model code), model, lcCat (cost type) and lcs (landed cost status) are chart-click selections
+  const defaults = { period: [String(yearOf(asOf))], entity: [], mode: [], route: [], brand: [], recvT: [], kpi: [], mcode: [], model: [], lcCat: [], lcs: [] };
   const [f, set, reset, toggle] = useFilters(defaults);
   const setF = (id, v) => { set(id, v); if (id === 'period') set('recvT', []); }; // weeks/months on the axis depend on the period
   // the one KPI card that stands for a subset of the received cars
@@ -44,12 +45,11 @@ export default function Inbound() {
   }, [V]);
   const shipPreds = {
     entity: pick(f.entity, (s) => s.entity), mode: pick(f.mode, (s) => s.mode), route: pick(f.route, (s) => s.route),
-    brand: f.brand.length ? (s) => matchAny(s.brands, f.brand) : null, ship: pick(f.ship, (s) => s.no),
+    brand: f.brand.length ? (s) => matchAny(s.brands, f.brand) : null,
     mcode: f.mcode.length ? (s) => f.mcode.some((c) => shipCodes.get(s.no)?.has(c)) : null,
   };
   const ships = useMemo(() => applyPreds(S, shipPreds), [S, f]);
   const open = useMemo(() => ships.filter((s) => s.status === 'In transit').sort((a, b) => (b.daysOpen ?? 0) - (a.daysOpen ?? 0)), [ships]);
-  const openChart = useMemo(() => applyPreds(S, shipPreds, 'ship').filter((s) => s.status === 'In transit').sort((a, b) => (b.daysOpen ?? 0) - (a.daysOpen ?? 0)), [S, f]);
 
   // receipts: shipments received in the date filter; the receiving week/month pick applies to receipts only
   const firstRecv = useMemo(() => S.reduce((m, s) => (s.recv != null && s.recv < m ? s.recv : m), Infinity), [S]);
@@ -67,7 +67,8 @@ export default function Inbound() {
     const card = f.kpi[0] && skip !== 'kpi' ? KPI_CARDS[f.kpi[0]]?.test : null;
     const lcCat = lcCatPred(f.lcCat, LC); // landed-cost type picked on the distribution chart
     return V.filter((v) => v.veh && v.ship && sh.has(v.ship) && (skip === 'brand' || match(v.brand, f.brand))
-      && (skip === 'model' || !f.model.length || f.model.includes(v.model ?? 'Unknown')) && (skip === 'lcCat' || !lcCat || lcCat(v)) && (!card || card(v)));
+      && (skip === 'model' || !f.model.length || f.model.includes(v.model ?? 'Unknown')) && (skip === 'lcCat' || !lcCat || lcCat(v))
+      && (skip === 'lcs' || !f.lcs.length || f.lcs.includes(v.lcs)) && (!card || card(v)));
   };
   const cars = useMemo(() => carsOf(), [S, V, f, range.from, range.to, flowAx]);
 
@@ -121,13 +122,20 @@ export default function Inbound() {
   const modeOpt = useMemo(() => hBars(t, modes.map((m) => m[0]), [{ name: 'Cars received', data: modes.map((m) => m[1]), color: t.s1 }], { selected: f.mode }), [t, modes, f.mode]);
 
   const modelCars = useMemo(() => carsOf('model'), [S, V, f, range.from, range.to, flowAx]); // cost-by-model charts skip their own pick
+  // landed cost status of the received cars (the chart skips its own pick)
+  const status = useMemo(() => {
+    const rows = carsOf('lcs');
+    return { n: rows.length, by: LCS.map((s) => [s, rows.filter((v) => v.lcs === s).length]) };
+  }, [S, V, f, range.from, range.to, flowAx]);
+  const statusOpt = useMemo(() => hBars(t, status.by.map((s) => s[0]), [{ name: 'Cars received', data: status.by.map((s) => s[1]), color: t.s1 }],
+    { catWidth: 170, selected: f.lcs, endText: (i) => `${int(status.by[i][1])} (${pct(status.n ? status.by[i][1] / status.n : 0, 0)})` }), [t, status, f.lcs]);
   const mixCars = useMemo(() => carsOf('lcCat'), [S, V, LC, f, range.from, range.to, flowAx]); // and the distribution skips its cost-type pick
 
   // completeness for shipments created in the period
   const created = ships.filter((s) => s.created != null && ymMatch(s.created, f.period));
   const fields = [
     ['ETA', (s) => s.eta != null], ['Bill of lading', (s) => s.bl != null],
-    ['Vessel', (s) => s.vessel != null], ['Port of loading', (s) => s.pol != null], ['Port of discharge', (s) => s.pod != null],
+    ['Port of loading', (s) => s.pol != null], ['Port of discharge', (s) => s.pod != null],
     ['Containers', (s) => s.containers != null],
   ];
 
@@ -156,17 +164,11 @@ export default function Inbound() {
     stacked: true, catWidth: 280, selected: f.mcode,
     tipExtra: (i) => [{ name: 'Model', value: [topCodes[i].brand, topCodes[i].model].filter(Boolean).join(' ') || '-' }, { name: 'Shipments', value: int(topCodes[i].shipN) }],
   }), [t, onWay, f.mcode]);
-  const openOpt = useMemo(() => hBars(t, openChart.map((s) => s.no), stages.map((st) => ({
-    name: ETA_LABEL[st], color: stColor[st], data: openChart.map((s) => (s.stage === st ? s.units : 0)),
-  })), {
-    stacked: true, catWidth: 110, endText: (i) => dayLabel(openChart[i].daysOpen), selected: f.ship,
-    tipExtra: (i) => [{ name: 'Model', value: openChart[i].mainModel || '-' }, { name: 'ETA', value: openChart[i].eta != null ? date(openChart[i].eta) : 'none' }, { name: 'Days since shipment created', value: int(openChart[i].daysOpen) }],
-    tipFoot: (i) => (openChart[i].vendors || []).join(', '),
-  }), [t, openChart, f.ship]);
 
   const shipCols = [
     { key: 'no', label: 'Shipment' },
-    { key: 'stage', label: 'Status', fmt: (v) => <Chip tone={ETA_TONE[v] || 'neutral'}>{ETA_LABEL[v] || v}</Chip>, text: (r) => ETA_LABEL[r.stage] || r.stage },
+    { key: 'pos', label: 'PO #', fmt: (v) => (v || []).join(', '), text: (r) => (r.pos || []).join(', '), wrap: true },
+    { key: 'stage', label: 'ETA status', fmt: (v) => <Chip tone={ETA_TONE[v] || 'neutral'}>{ETA_LABEL[v] || v}</Chip>, text: (r) => ETA_LABEL[r.stage] || r.stage },
     { key: 'created', label: 'Created', fmt: date, csv: (r) => date(r.created) },
     { key: 'mainModel', label: 'Main model' },
     { key: 'units', label: 'Cars', align: 'r', fmt: int },
@@ -174,7 +176,7 @@ export default function Inbound() {
     { key: 'mode', label: 'Mode' },
     { key: 'bl', label: 'BL' },
     { key: 'pod', label: 'Port of discharge' },
-    { key: 'eta', label: 'ETA', fmt: date, csv: (r) => date(r.eta) },
+    { key: 'eta', label: 'ETA (expected arrival)', fmt: date, csv: (r) => date(r.eta) },
     { key: 'recv', label: 'Received', fmt: date, csv: (r) => date(r.recv) },
     { key: 'rVsEta', label: 'Receipt vs ETA (d)', align: 'r', fmt: (v) => (v == null ? '-' : int(v)) },
     { key: 'dPoRecv', label: 'PO to receipt (d)', align: 'r', fmt: (v) => (v == null ? '-' : int(v)) },
@@ -192,8 +194,8 @@ export default function Inbound() {
         { id: 'route', label: 'Supply route', options: opts.route },
         { id: 'brand', label: 'Brand', options: opts.brand },
       ]} picks={[
-        { id: 'recvT', label: 'Received', fmt: flowAx.label }, { id: 'ship', label: 'Shipment' },
-        { id: 'kpi', label: 'Card', fmt: (id) => KPI_CARDS[id]?.label ?? id }, { id: 'mcode', label: 'Model code' }, { id: 'model', label: 'Model' }, { id: 'lcCat', label: 'Cost type' },
+        { id: 'recvT', label: 'Received', fmt: flowAx.label },
+        { id: 'kpi', label: 'Card', fmt: (id) => KPI_CARDS[id]?.label ?? id }, { id: 'mcode', label: 'Model code' }, { id: 'model', label: 'Model' }, { id: 'lcCat', label: 'Cost type' }, { id: 'lcs', label: 'Landed cost' },
       ]} />
       <div className="kpis">
         <Kpi {...kpiClick(f, set, null)} label="Units received" value={int(k.units)} unit="cars" sub={`${int(k.ships)} shipments`} />
@@ -212,6 +214,13 @@ export default function Inbound() {
         </ChartCard>
       </div>
       <div className="grid-2">
+        <ChartCard title="Landed cost status" sub={`Cars received in the period · ${int(status.n)} cars`}
+          table={{ columns: [{ key: 's', label: 'Landed cost status' }, { key: 'n', label: 'Cars received', align: 'r', fmt: int }], rows: status.by.map(([s, c]) => ({ s, n: c, __key: s })), search: false }}>
+          <EChart option={statusOpt} height={rowsHeight(status.by.length, 40)} label="Received cars by landed cost status" onPick={(i) => toggle('lcs', status.by[i][0])} />
+        </ChartCard>
+        <LandedMix cars={mixCars} LC={LC} selected={f.lcCat} onPick={(c) => toggle('lcCat', c)} what="received cars" />
+      </div>
+      <div className="grid-2">
         <ChartCard title="Cars received by brand" sub={`Cars received in the period${brands.length > topBrands.length ? ` · top ${topBrands.length} of ${brands.length} brands, switch to Table for all` : ''}`}
           table={{ columns: [{ key: 'b', label: 'Brand' }, { key: 'u', label: 'Cars', align: 'r', fmt: int }], rows: brands.map(([b, u]) => ({ b, u, __key: b })), search: false, csvName: 'received-by-brand' }}>
           {brands.length ? <EChart option={brandOpt} height={rowsHeight(topBrands.length, 28)} label="Cars received by brand" onPick={(i) => toggle('brand', topBrands[i][0])} />
@@ -226,7 +235,6 @@ export default function Inbound() {
       <div className="grid-2">
         <ModelCost cars={modelCars} selected={f.model} onPick={(m) => toggle('model', m)} what="cars received" csvPrefix="received" />
       </div>
-      <LandedMix cars={mixCars} LC={LC} selected={f.lcCat} onPick={(c) => toggle('lcCat', c)} what="received cars" />
       <Card title="Shipment data completeness" sub={`${int(created.length)} shipments created in the period - fields the arrival schedule depends on`}>
         <div style={{ padding: '4px 6px 6px' }}>
           {fields.map(([name, test]) => {
@@ -251,20 +259,15 @@ export default function Inbound() {
         legend={stages.map((st) => ({ name: ETA_LABEL[st], color: stColor[st] }))}
         table={{ columns: [
           { key: 'key', label: 'Model code' }, { key: 'brand', label: 'Brand' }, { key: 'model', label: 'Model' },
-          { key: 'n', label: 'Cars', align: 'r', fmt: int }, { key: 'shipN', label: 'Shipments', align: 'r', fmt: int },
+          { key: 'n', label: 'Cars', align: 'r', fmt: int }, { key: 'shipN', label: 'Shipments', align: 'r', fmt: int, total: false },
           { key: 'passed', label: 'ETA passed', align: 'r', fmt: int }, { key: 'noEta', label: 'No ETA', align: 'r', fmt: int }, { key: 'ahead', label: 'ETA ahead', align: 'r', fmt: int },
         ], rows: onWay, csvName: 'model-codes-on-the-way' }}>
         {codesMissing ? <p className="muted" style={{ padding: 12 }}>This dataset was saved before model codes were kept - run NetSuite Data Sync (or upload the export) again to see them.</p>
           : onWay.length ? <EChart option={codeOpt} height={rowsHeight(topCodes.length, 26)} label="Model codes on the way" onPick={(i) => toggle('mcode', topCodes[i].key === NO_CODE ? null : topCodes[i].key)} />
             : <p className="muted" style={{ padding: 12 }}>No cars on the way for these filters.</p>}
       </ChartCard>
-      <ChartCard title="On the way now" sub="Open inbound shipments, cars per shipment · bar end = days since the shipment was created"
-        legend={stages.map((st) => ({ name: ETA_LABEL[st], color: stColor[st] }))}
-        table={{ columns: shipCols.filter((c) => ['no', 'stage', 'created', 'mainModel', 'units', 'vendors', 'eta'].includes(c.key)), rows: open, csvName: 'open-shipments', search: false }}>
-        {openChart.length ? <EChart option={openOpt} height={rowsHeight(openChart.length, 24)} label="Open shipments" onPick={(i) => toggle('ship', openChart[i].no)} /> : <p className="muted" style={{ padding: 12 }}>No open shipments for these filters.</p>}
-      </ChartCard>
-      <Card title="Shipments" sub="Open shipments first, then shipments received in the period">
-        <DataTable columns={shipCols} rows={tableRows} csvName="inbound-shipments" />
+      <Card title="Shipments" sub="On the way first, then shipments received in the period. Search by shipment or PO number.">
+        <DataTable columns={shipCols} rows={tableRows} csvName="inbound-shipments" searchPlaceholder="Search by shipment or PO #" />
       </Card>
     </>
   );

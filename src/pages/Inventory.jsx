@@ -13,7 +13,7 @@ import { COMMERCIAL } from '../data/pipeline.js';
 
 const B4 = ['0-30', '31-60', '61-90', '90+'];
 const B6 = ['0-30', '31-60', '61-90', '91-180', '181-365', '365+'];
-const COMM_SHORT = { Unreserved: 'Unreserved', 'Reserved (not fully paid)': 'Reserved', 'Paid - awaiting delivery': 'Paid, awaiting delivery', 'On hold': 'On hold' };
+const COMM_SHORT = { Unreserved: 'Available', 'Reserved (not fully paid)': 'Reserved', 'Paid - awaiting delivery': 'Paid, awaiting delivery', 'On hold': 'On hold' };
 
 function median(arr) {
   const a = arr.filter((x) => x != null).sort((x, y) => x - y);
@@ -23,7 +23,10 @@ function median(arr) {
 // KPI cards that stand for a subset of stock: clicking one filters the page to it
 const KPI_CARDS = {
   aged: { label: 'Over 90 days in stock', test: (v) => v.bucket === '90+' },
-  unreserved: { label: 'Unreserved', test: (v) => v.comm === 'Unreserved' },
+  unreserved: { label: 'Available stock', test: (v) => v.comm === 'Unreserved' },
+  reserved: { label: 'Reserved cars', test: (v) => v.comm === 'Reserved (not fully paid)' },
+  paid: { label: 'Paid, awaiting delivery', test: (v) => v.comm === 'Paid - awaiting delivery' },
+  availValue: { label: 'Available + reserved stock', test: (v) => v.comm === 'Unreserved' || v.comm === 'Reserved (not fully paid)' },
   pending: { label: 'Location not updated', test: (v) => v.locType === 'Pending Receiving' },
 };
 
@@ -57,6 +60,8 @@ export default function Inventory() {
     return {
       n: stock.length, value: sum(stock, (v) => v.tc), days: avg(stock, (v) => v.days), med: median(stock.map((v) => v.days)),
       aged, agedShare: stock.length ? aged / stock.length : null, unreserved: stock.filter((v) => v.comm === 'Unreserved').length,
+      reserved: stock.filter((v) => v.comm === 'Reserved (not fully paid)').length, paid: stock.filter((v) => v.comm === 'Paid - awaiting delivery').length,
+      availValue: sum(stock.filter((v) => v.comm === 'Unreserved' || v.comm === 'Reserved (not fully paid)'), (v) => v.tc),
       pending: stock.filter((v) => v.locType === 'Pending Receiving').length,
       noLanded: stock.filter((v) => v.lcs === 'Not posted - import').length,
       estimated: stock.filter((v) => v.startBasis !== 'IBV date').length,
@@ -122,7 +127,7 @@ export default function Inventory() {
   const histN = useMemo(() => lines(t, hist.keys, [{ name: 'Cars in stock', data: hist.n, color: t.s1 }], { xFmt: monthLabel }), [t, hist]);
   const histAge = useMemo(() => lines(t, hist.keys, [{ name: 'Average days in stock', data: hist.avgAge, color: t.s2 }], { xFmt: monthLabel, fmt: (v) => (v == null ? '-' : `${dec(v, 0)} d`), axisFmt: (v) => v }), [t, hist]);
   const histTable = {
-    columns: [{ key: 'm', label: 'Month end' }, { key: 'n', label: 'Cars in stock', align: 'r', fmt: int }, { key: 'a', label: 'Avg days in stock', align: 'r', fmt: (v) => dec(v, 1) }],
+    columns: [{ key: 'm', label: 'Month end' }, { key: 'n', label: 'Cars in stock', align: 'r', fmt: int, total: false }, { key: 'a', label: 'Avg days in stock', align: 'r', fmt: (v) => dec(v, 1) }],
     rows: hist.keys.map((key, j) => ({ __key: key, m: monthLabel(key), n: hist.n[j], a: hist.avgAge[j] })), search: false, csvName: 'stock-history',
   };
 
@@ -153,13 +158,12 @@ export default function Inventory() {
         { id: 'bucket', label: 'Days in stock', options: opts.bucket },
       ]} picks={[{ id: 'age6', label: 'Age', fmt: (b) => `${b} days` }, { id: 'site', label: 'Location' }, { id: 'kpi', label: 'Card', fmt: (id) => KPI_CARDS[id]?.label ?? id }]} />
       <div className="kpis">
-        <Kpi {...kpiClick(f, set, null)} label="Cars in stock" value={int(k.n)} sub={`${int(transit)} more on the way`} />
-        <Kpi {...kpiClick(f, set, null)} label="Stock value" value={aed(k.value)} sub={aedFull(k.value)} tone="money" />
+        <Kpi {...kpiClick(f, set, 'unreserved')} label="Available stock" value={int(k.unreserved)} unit="cars" sub={`${pct(k.n ? k.unreserved / k.n : null, 0)} of stock · no VSO`} />
+        <Kpi {...kpiClick(f, set, 'reserved')} label="Reserved cars" value={int(k.reserved)} unit="cars" sub={`${pct(k.n ? k.reserved / k.n : null, 0)} of stock · VSO not fully paid`} />
+        <Kpi {...kpiClick(f, set, 'paid')} label="Paid, awaiting delivery" value={int(k.paid)} unit="cars" sub={`${pct(k.n ? k.paid / k.n : null, 0)} of stock · fully paid, not delivered`} />
+        <Kpi {...kpiClick(f, set, 'availValue')} label="Available stock value" value={aed(k.availValue)} sub={`(Available + reserved stock) · ${aedFull(k.availValue)}`} tone="money" />
+        <Kpi label="Cars on the way" value={int(transit)} unit="cars" sub="Bought and in transit, not yet received" />
         <Kpi {...kpiClick(f, set, null)} label="Average days in stock" value={dec(k.days, 0)} unit="days" sub={`Median ${k.med ?? '-'} days`} />
-        <Kpi {...kpiClick(f, set, 'aged')} label="Over 90 days" value={pct(k.agedShare)} sub={`${int(k.aged)} cars`}
-          chip={k.agedShare > 0.25 ? <Chip tone="serious">Above 25% of stock</Chip> : null} />
-        <Kpi {...kpiClick(f, set, 'unreserved')} label="Unreserved" value={int(k.unreserved)} sub={`${pct(k.n ? k.unreserved / k.n : null, 0)} of stock has no VSO`} />
-        <Kpi {...kpiClick(f, set, 'pending')} label="Location not updated" value={int(k.pending)} sub="Received, still at Pending Receiving" tone="quiet" />
       </div>
       {k.pending > 0 && !f.locType.length && f.kpi[0] !== 'pending' && (
         <Banner tone="warn" title={`${int(k.pending)} received cars still show a Pending Receiving location`} onClick={() => set('kpi', ['pending'])}>

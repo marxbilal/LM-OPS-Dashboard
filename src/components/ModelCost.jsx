@@ -10,9 +10,10 @@ import { groupModels } from '../data/landed.js';
 
 /**
  * cars: the cars to cost (each chart ignores the page's own model pick, so pass cars without it);
- * selected: picked models; onPick(model); what: how the cars are described, e.g. "cars received".
+ * selected: picked models; onPick(model); what: how the cars are described, e.g. "cars received";
+ * share: false leaves out the "Landed cost as a share of purchase" card.
  */
-export default function ModelCost({ cars, selected = [], onPick, what = 'cars', csvPrefix = 'model' }) {
+export default function ModelCost({ cars, selected = [], onPick, what = 'cars', csvPrefix = 'model', share = true }) {
   const t = useChartTheme();
   const models = useMemo(() => groupModels(cars), [cars]);
   // top 15 on each chart, plus any picked model further down
@@ -46,11 +47,11 @@ export default function ModelCost({ cars, selected = [], onPick, what = 'cars', 
         table={{ columns: cols, rows: models, csvName: `${csvPrefix}-cost-by-model` }}>
         {top.length ? <EChart option={costOpt} height={rowsHeight(top.length, 28)} label={`Cost per car by model (${what})`} onPick={(i) => onPick(top[i].key)} /> : none}
       </ChartCard>
-      <ChartCard title="Landed cost as a share of purchase" sub={`Models with landed cost posted on 5 or more ${what}`}
+      {share && <ChartCard title="Landed cost as a share of purchase" sub={`Models with landed cost posted on 5 or more ${what}`}
         table={{ columns: cols, rows: lcModels, csvName: `${csvPrefix}-landed-share`, search: false }}>
         {lcModels.length ? <EChart option={lcOpt} height={rowsHeight(lcModels.length, 28)} label={`Landed cost as a share of purchase by model (${what})`} onPick={(i) => onPick(lcModels[i].key)} />
           : <p className="muted" style={{ padding: 12 }}>No model has landed cost posted on 5 or more {what} for these filters.</p>}
-      </ChartCard>
+      </ChartCard>}
     </>
   );
 }

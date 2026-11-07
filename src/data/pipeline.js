@@ -155,7 +155,6 @@ const COMM = {
 export const COMMERCIAL = ['Unreserved', 'Reserved (not fully paid)', 'Paid - awaiting delivery', 'On hold'];
 const UAE_VENDOR = /\bFZE\b|FZCO|F\.Z\.E|L\.?\s?L\.?\s?C|\bDMCC\b|FZ-LLC|FZ LLC/;
 const BL_RE = /\bB\s*\/?\s*L\b\.?\s*(?:NO\.?|NUMBER|#)?\s*[:.-]?\s*([A-Z]{1,6}[A-Z0-9]{5,18}|\d{8,14})/;
-const ETA_RE = /\bETA\b\s*[:-]?\s*(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/;
 
 /** Fields that depend on the as-of date or are cheap to recompute (not stored). */
 export function deriveVehicles(V, asOf) {
@@ -404,14 +403,11 @@ export function buildDataset(input, opts = {}) {
     g.rows.push(V[i]);
   });
   const S = [];
-  let blFromMemo = 0, etaFromMemo = 0;
+  let blFromMemo = 0;
   for (const [no, g] of sg) {
     const h = g.h, vs = g.rows;
     const memo = `${h['Shipment Memo'] ?? ''} || ${h['IBV Memo'] ?? ''}`.toUpperCase();
     const blM = memo.match(BL_RE);
-    const etaM = memo.match(ETA_RE);
-    let etaMemo = null;
-    if (etaM) etaMemo = utcDay(+etaM[3], +etaM[2], +etaM[1]);
     let blField = h['Bill of Lading'] != null ? String(h['Bill of Lading']).toUpperCase().replace(/\s+/g, '') : null;
     if (blField && (/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test(blField) || blField.startsWith('VST-'))) blField = null;
     const bl = blField ?? (blM ? blM[1] : null);
@@ -429,8 +425,7 @@ export function buildDataset(input, opts = {}) {
     const statusRaw = h['Shipment Status2'];
     const status = statusRaw === 'received' ? 'Received' : statusRaw === 'inTransit' ? 'In transit' : statusRaw === 'closed' ? 'Closed' : (statusRaw ?? 'Unknown');
     const etaField = h['Expected Arrival Date'];
-    const eta = etaField ?? etaMemo;
-    if (etaField == null && etaMemo != null) etaFromMemo++;
+    const eta = etaField; // ETA is the shipment's Expected Arrival Date only (no dates read from memo text)
     const etd = h['Expected Shipping Date'], atd = h['Actual Shipping Date'], ata = h['Actual Delivery Date'];
     const recv = h['Receiving Date'], created = h['Shipment Created'];
     const poDates = vs.map((v) => v.poDate).filter((d) => d != null);
@@ -449,7 +444,7 @@ export function buildDataset(input, opts = {}) {
       brands: topN(vs.map((v) => v.brand), 3).map((x) => x[0]), mainModel: topN(vs.map((v) => v.model), 1)[0]?.[0] ?? null,
       units: vs.length, unitsHdr: unitsHdr ? +unitsHdr[0] : null, containers, mode: modeS,
       bl, blSource: blField ? 'Field' : blM ? 'Parsed from memo' : null, vessel: h['Vessel Voyage'] ? String(h['Vessel Voyage']).toUpperCase().replace(/\s+/g, ' ') : null,
-      pol, polC, pod, podC, poDate, created, etd, atd, eta, etaSource: etaField != null ? 'Field' : etaMemo != null ? 'Parsed from memo' : null,
+      pol, polC, pod, podC, poDate, created, etd, atd, eta, etaSource: etaField != null ? 'Field' : null,
       ata, recv, receiveBy,
       copied: etd != null && atd != null && etaField != null && etd === atd && atd === etaField,
       dPoShip: created != null && poDate != null ? created - poDate : null,
@@ -468,7 +463,7 @@ export function buildDataset(input, opts = {}) {
     });
     for (const v of vs) { v.shipStage = stage; v.shipMode = modeS; v.eta = eta; v.bl = bl; v.pod = pod; }
   }
-  log.push(['Inbound', `${S.length.toLocaleString()} shipments built (1 shipment = 1 IBV); ${blFromMemo} BL numbers and ${etaFromMemo} ETAs recovered from memo text; port spellings unified`]);
+  log.push(['Inbound', `${S.length.toLocaleString()} shipments built (1 shipment = 1 IBV); ${blFromMemo} BL numbers recovered from memo text; ETA = Expected Arrival Date; port spellings unified`]);
 
   // ================================================================ purchase orders
   const poHdr = ['PO Internal ID', 'PO Date', 'Vendor', 'Vendor #', 'PO Currency', 'PO Exchange Rate', 'Receive By', 'PO Memo',

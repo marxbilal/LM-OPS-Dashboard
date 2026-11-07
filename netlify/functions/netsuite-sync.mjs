@@ -6,6 +6,7 @@
 // GET /api/netsuite-sync?table=cards&page=0  -> { table, rows: [{...}], page, pageCount, total }
 import crypto from 'node:crypto';
 import { TABLES } from '../../src/data/netsuite.js';
+import { verifySession } from '../lib/auth.mjs';
 
 const KEYS = ['ACCOUNT_ID', 'CONSUMER_KEY', 'CONSUMER_SECRET', 'TOKEN_ID', 'TOKEN_SECRET'];
 // Each setting may be named NETSUITE_<KEY> (the names used in .env) or NS_<KEY>.
@@ -42,6 +43,7 @@ export function oauthHeader(method, baseUrl, params, env = settings(), now = Dat
 }
 
 export default async (req) => {
+  if (!verifySession(req)) return json({ error: 'Sign in to the dashboard first.' }, 401);
   if (req.headers.get('x-upload-key') !== uploadKey()) return json({ error: 'Wrong upload key' }, 403);
   const env = settings();
   const missing = KEYS.filter((k) => !env[`NS_${k}`]);

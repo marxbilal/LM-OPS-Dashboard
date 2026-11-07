@@ -36,6 +36,10 @@ To ship the same data to everyone on a static deploy, run `node scripts/make-sna
 before `npm run build` - the site then opens with that snapshot until someone uploads a newer file.
 
 ### Who can see the data
+Everyone has to sign in first (Legend email + password, checked on the server; see `DASHBOARD_USERS` below). To add a user, run
+`node -e "import('./netlify/lib/auth.mjs').then(a => console.log('email@legendmotorsuae.com:' + a.hashPassword('their-password')))"`
+and append the output (comma-separated) to `DASHBOARD_USERS` in `.env` and on Netlify.
+
 The dashboards are open to anyone with the site URL (only Upload Data is locked), and so is the dataset behind them.
 If the URL may leave the team, turn on Netlify password protection or SSO for the site.
 
@@ -56,6 +60,8 @@ browser into the export's columns; the queries and the join live in `src/data/ne
    | `NETSUITE_CONSUMER_KEY` / `NETSUITE_CONSUMER_SECRET` | from the integration record |
    | `NETSUITE_TOKEN_ID` / `NETSUITE_TOKEN_SECRET` | from the access token |
    | `UPLOAD_KEY` | `17278` |
+   | `DASHBOARD_USERS` | who can sign in: `email:salt:hash` per user, comma-separated (scrypt hash, never the plain password) |
+   | `SESSION_SECRET` | any long random string; signs the 7-day sign-in sessions |
 
    - **Locally:** they live in `.env` in the project root (git-ignored). `npm run dev` serves `/api/netsuite-sync` from
      them, so **NetSuite Data Sync** works on `localhost` without the Netlify CLI.

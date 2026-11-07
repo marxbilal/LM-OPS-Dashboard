@@ -3,10 +3,15 @@
 // GET  /api/dataset?version=v&part=i     -> one gzip part of the packed dataset
 // PUT  /api/dataset?version=v&part=i     -> upload a part        (needs x-upload-key)
 // POST /api/dataset?commit=1             -> make a version live   (needs x-upload-key)
+// GET  /api/dataset?settings=1           -> shared dashboard settings ({ hiddenPages })
+// PUT  /api/dataset?settings=1           -> save them                 (needs x-upload-key)
+// Every request needs a signed-in session (Authorization: Bearer <token> from /api/login).
 import { getStore } from '@netlify/blobs';
+import { verifySession } from '../lib/auth.mjs';
 
 const uploadKey = () => process.env.UPLOAD_KEY || '17278';
 const VERSION = /^[a-z0-9-]{4,40}$/;
+const PAGES = ['po', 'inbound', 'inventory', 'outbound', 'costs'];
 const PART = /^\d{1,3}$/;
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
@@ -14,10 +19,22 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-lm-store': '1' },
 });
 
-export async function handle(req, store) {
+export async function handle(req, store, env = process.env) {
+  if (!verifySession(req, env)) return json({ error: 'Sign in to the dashboard first.' }, 401);
   const url = new URL(req.url);
   const version = url.searchParams.get('version');
   const part = url.searchParams.get('part');
+
+  if (url.searchParams.get('settings') != null) {
+    if (req.method === 'GET') return json((await store.get('settings', { type: 'json' })) || {});
+    if (req.headers.get('x-upload-key') !== uploadKey()) return json({ error: 'Wrong upload key' }, 403);
+    if (req.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
+    let b;
+    try { b = await req.json(); } catch { return json({ error: 'Bad request' }, 400); }
+    const hiddenPages = Array.isArray(b.hiddenPages) ? b.hiddenPages.filter((p) => PAGES.includes(p)) : [];
+    await store.setJSON('settings', { hiddenPages, savedAt: new Date().toISOString() });
+    return json({ ok: true, hiddenPages });
+  }
 
   if (req.method === 'GET') {
     if (version != null || part != null) {
@@ -25,7 +42,7 @@ export async function handle(req, store) {
       const buf = await store.get(`v/${version}/part-${part}`, { type: 'arrayBuffer' });
       if (!buf) return json({ error: 'Not found' }, 404);
       return new Response(buf, {
-        headers: { 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=31536000, immutable', 'x-lm-store': '1' },
+        headers: { 'content-type': 'application/octet-stream', 'cache-control': 'private, max-age=31536000, immutable', 'x-lm-store': '1' },
       });
     }
     const current = await store.get('current', { type: 'json' });

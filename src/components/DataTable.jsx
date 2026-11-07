@@ -15,9 +15,32 @@ const cmp = (a, b) => {
  * filters: [{ key, label, options: (string | {value,label})[] }] - checkbox dropdowns in the table bar that narrow
  * this table only (row[key] must be one of the picked values).
  */
+// Columns that must not be added up in an automatic total row: averages, days, rates, prices and percentages.
+const NO_SUM = /avg|average|median|days|rate|price|%|posted|paid|share/i;
+
+/**
+ * totals: 'auto' sums the right-aligned number columns that can be added up.
+ * column.total overrides: 'sum' forces a sum, false leaves it blank, a function (rows) => text computes it (e.g. an overall rate).
+ */
+function autoTotals(columns, rows) {
+  const out = {};
+  let any = false;
+  for (const c of columns) {
+    if (typeof c.total === 'function') { out[c.key] = c.total(rows); any = true; continue; }
+    if (c.align !== 'r' || c.total === false || (c.total !== 'sum' && NO_SUM.test(c.label))) continue;
+    let s = 0, n = 0;
+    for (const r of rows) { const v = r[c.key]; if (typeof v === 'number' && Number.isFinite(v)) { s += v; n++; } }
+    if (!n) continue;
+    let txt = int(s);
+    if (c.fmt) { try { const f = c.fmt(s, {}); if (typeof f === 'string' || typeof f === 'number') txt = f; } catch { /* keep the plain number */ } }
+    out[c.key] = txt; any = true;
+  }
+  return any ? out : null;
+}
+
 export default function DataTable({
   columns, rows, pageSize = 50, search = true, csvName, totals, onRowClick, initialSort, maxHeight = 520, caption, empty = 'No rows match the current filters.',
-  filters = [],
+  filters = [], searchPlaceholder = 'Search this table',
 }) {
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState({});
@@ -55,14 +78,14 @@ export default function DataTable({
   const toggle = (key) => setSort((s) => (s && s.key === key ? { key, dir: -s.dir } : { key, dir: columns.find((c) => c.key === key)?.align === 'r' ? -1 : 1 }));
   // S.No numbers rows in their current order (after filters, search and sort), continuing across pages
   const download = () => saveFile(`${csvName || 'table'}.csv`, toCSV([{ key: '__sno', label: 'S.No' }, ...columns.filter((c) => !c.noCsv)], sorted.map((r, i) => ({ ...r, __sno: i + 1 }))));
-  const tot = typeof totals === 'function' ? totals(sorted) : totals;
+  const tot = totals === 'auto' ? autoTotals(columns, sorted) : typeof totals === 'function' ? totals(sorted) : totals;
 
   return (
     <div>
       {(search || csvName || filters.length > 0) && (
         <div className="table-bar">
           <div className="table-tools">
-            {search && <input type="search" placeholder="Search this table" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search this table" />}
+            {search && <input type="search" placeholder={searchPlaceholder} value={q} onChange={(e) => setQ(e.target.value)} aria-label={searchPlaceholder} />}
             {filters.map((f) => (
               <MultiSelect key={f.key} id={`tf-${f.key}`} label={f.label} allLabel={`All ${f.label.toLowerCase()}`} value={picked[f.key] || []}
                 options={(f.options || []).map((o) => (typeof o === 'object' ? o : { value: o, label: o }))} active={!!picked[f.key]?.length}
