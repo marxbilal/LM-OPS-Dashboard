@@ -46,12 +46,12 @@ export default function Outbound() {
     model: pick(f.model, (v) => v.model ?? 'Unknown'), kpi: kpiPred(f, KPI_CARDS),
   };
   // waiting cars: waiting status applies here only; dispatched cars: dispatch period and bucket apply there only
-  const open = useMemo(() => applyPreds(V.filter((v) => v.openVso), { ...keepPreds, comm: pick(f.comm, (v) => v.comm) }), [V, f]);
+  const openOf = (skip) => applyPreds(V.filter((v) => v.openVso), { ...keepPreds, comm: pick(f.comm, (v) => v.comm) }, skip);
+  const open = useMemo(() => openOf(), [V, f]);
   const dispBase = (skip) => applyPreds(V.filter((v) => v.dispatched && v.out != null && ymMatch(v.out, f.period)), keepPreds, skip);
   const flowAx = useMemo(() => {
     const r = clampRange(range, dispBase(), (v) => v.out, asOf);
-    const unit = grain === 'day' ? (r.to - r.from > 120 ? 'week' : 'day') : grain;
-    return timeAxis(r.from, r.to, unit);
+    return timeAxis(r.from, r.to, grain);
   }, [V, f, grain, range.from, range.to, asOf]);
   const dispOf = (skip) => applyPreds(dispBase(skip), { outT: pick(f.outT, (v) => flowAx.keyOf(v.out)) }, skip);
   const disp = useMemo(() => dispOf(), [V, f, range.from, range.to, flowAx]);
@@ -84,9 +84,32 @@ export default function Outbound() {
     return { ax, n };
   }, [V, f, range.from, range.to, flowAx]);
   const flowOpt = useMemo(() => columns(t, flow.ax.keys, [{ name: 'Cars dispatched', data: flow.n, color: t.s1 }],
-    { xFmt: flow.ax.label, capLabels: flow.ax.keys.length <= 16, selected: f.outT }), [t, flow, f.outT]);
+    { xFmt: flow.ax.label, selected: f.outT }), [t, flow, f.outT]);
 
-  const modelCars = useMemo(() => dispOf('model'), [V, f, range.from, range.to, flowAx]); // cost-by-model charts skip their own pick
+  // cost by model follows the cards: the waiting cars when "Paid, awaiting delivery" or "Reserved" is picked, else the
+  // dispatched cars (the chart skips its own model pick)
+  const waitingCard = f.kpi[0] === 'paid' || f.kpi[0] === 'res';
+  const modelCars = useMemo(() => (waitingCard ? openOf('model') : dispOf('model')), [V, f, range.from, range.to, flowAx]);
+  // models by commercial state; a picked card (Paid / Reserved / Dispatched) already narrows the cars, so the chart
+  // re-sorts to that one state (the chart skips its own model pick)
+  const stateModels = useMemo(() => {
+    const m = new Map();
+    const add = (v, k) => {
+      const key = v.model ?? 'Unknown';
+      const e = m.get(key) || { key, brand: v.brand, res: 0, paid: 0, sold: 0 };
+      e[k]++; m.set(key, e);
+    };
+    for (const v of openOf('model')) add(v, v.comm === PAID ? 'paid' : 'res');
+    for (const v of dispOf('model')) if (v.veh) add(v, 'sold');
+    return [...m.values()].map((e) => ({ ...e, __key: e.key, n: e.res + e.paid + e.sold })).sort((a, b) => b.n - a.n);
+  }, [V, f, range.from, range.to, flowAx]);
+  const topStateModels = [...stateModels.slice(0, 15), ...stateModels.slice(15).filter((e) => f.model.includes(e.key))];
+  const stateModelOpt = useMemo(() => hBars(t, topStateModels.map((e) => e.key), [
+    { name: 'Reserved', data: topStateModels.map((e) => e.res), color: t.s2 },
+    { name: 'Paid, awaiting delivery', data: topStateModels.map((e) => e.paid), color: t.s3 },
+    { name: 'Sold', data: topStateModels.map((e) => e.sold), color: t.s1 },
+  ], { stacked: true, catWidth: 150, selected: f.model, tipFoot: (i) => topStateModels[i].brand }), [t, stateModels, f.model]);
+  const modelWhat = f.kpi[0] === 'paid' ? 'cars paid, awaiting delivery' : f.kpi[0] === 'res' ? 'reserved cars' : 'cars dispatched';
 
   // destinations: "Not set / unclear" stands for two raw values
   const destVals = (key) => (key === UNCLEAR ? ['Not set', 'Unspecified'] : [key]);
@@ -137,20 +160,34 @@ export default function Outbound() {
         <Kpi {...kpiClick(f, set, 'postedAll')} label="Landed cost posted" value={pct(k.disp ? k.postedAll / k.disp : null, 0)}
           sub={`${int(k.postedAll)} of ${int(k.disp)} dispatched cars`} />
       </div>
-      <ChartCard title={`Cars dispatched per ${flow.ax.unit}`} sub="Completed dispatches by out date. Planned dispatches need a planned date in NetSuite."
-        tools={<div className="seg" role="group" aria-label="Grain">
-          <button type="button" aria-pressed={grain === 'day'} onClick={() => setGrain('day')}>Day</button>
-          <button type="button" aria-pressed={grain === 'week'} onClick={() => setGrain('week')}>Week</button>
-          <button type="button" aria-pressed={grain === 'month'} onClick={() => setGrain('month')}>Month</button>
-        </div>}
-        table={{ columns: [{ key: 'p', label: 'Period' }, { key: 'n', label: 'Cars dispatched', align: 'r', fmt: int }], rows: flow.ax.keys.map((key, i) => ({ __key: key, p: flow.ax.label(key), n: flow.n[i] })), search: false, csvName: 'dispatches' }}>
-        <EChart option={flowOpt} height={300} label="Cars dispatched over time" onPick={(i) => toggle('outT', flow.ax.keys[i])} />
-      </ChartCard>
       <div className="grid-2">
-        <ModelCost cars={modelCars} selected={f.model} onPick={(m) => toggle('model', m)} what="cars dispatched" csvPrefix="dispatched" share={false} />
+        <ChartCard title={`Cars dispatched per ${flow.ax.unit}`} sub="Completed dispatches by out date. Planned dispatches need a planned date in NetSuite."
+          tools={<div className="seg" role="group" aria-label="Grain">
+            <button type="button" aria-pressed={grain === 'week'} onClick={() => setGrain('week')}>Week</button>
+            <button type="button" aria-pressed={grain === 'month'} onClick={() => setGrain('month')}>Month</button>
+          </div>}
+          table={{ columns: [{ key: 'p', label: 'Period' }, { key: 'n', label: 'Cars dispatched', align: 'r', fmt: int }], rows: flow.ax.keys.map((key, i) => ({ __key: key, p: flow.ax.label(key), n: flow.n[i] })), search: false, csvName: 'dispatches' }}>
+          {flow.n.some((x) => x > 0) ? <EChart option={flowOpt} height={300} label="Cars dispatched over time" onPick={(i) => toggle('outT', flow.ax.keys[i])} />
+            : <p className="muted" style={{ padding: 12 }}>No cars dispatched for these filters.</p>}
+        </ChartCard>
+        <ChartCard title="Models: reserved, awaiting delivery and sold"
+          sub={`${int(stateModels.length)} models · sold = dispatched in the period${stateModels.length > topStateModels.length ? ` - top ${topStateModels.length} shown, switch to Table for all` : ''}`}
+          legend={[{ name: 'Reserved', color: t.s2 }, { name: 'Paid, awaiting delivery', color: t.s3 }, { name: 'Sold', color: t.s1 }]}
+          table={{ columns: [
+            { key: 'key', label: 'Model' }, { key: 'brand', label: 'Brand' }, { key: 'res', label: 'Reserved', align: 'r', fmt: int },
+            { key: 'paid', label: 'Awaiting delivery', align: 'r', fmt: int }, { key: 'sold', label: 'Sold', align: 'r', fmt: int },
+            { key: 'n', label: 'Total', align: 'r', fmt: int },
+          ], rows: stateModels, csvName: 'models-by-state' }}>
+          {topStateModels.length ? <EChart option={stateModelOpt} height={rowsHeight(topStateModels.length, 26)} label="Models by reserved, awaiting delivery and sold" onPick={(k) => toggle('model', topStateModels[k].key)} />
+            : <p className="muted" style={{ padding: 12 }}>No cars for these filters.</p>}
+        </ChartCard>
+      </div>
+      <div className="grid-2">
+        <ModelCost cars={modelCars} selected={f.model} onPick={(m) => toggle('model', m)} what={modelWhat} csvPrefix={waitingCard ? 'waiting' : 'dispatched'} share={false} />
         <ChartCard title="Dispatched, by destination" sub="Cars dispatched in the period"
           table={{ columns: [{ key: 'k', label: 'Destination' }, { key: 'n', label: 'Cars', align: 'r', fmt: int }], rows: dispDest.map(([k2, n]) => ({ k: k2, n, __key: k2 })), search: false }}>
-          <EChart option={dispDestOpt} height={rowsHeight(dispDest.length, 26)} label="Dispatched cars by destination" onPick={(i) => toggle('dest', destVals(dispDest[i][0]))} />
+          {dispDest.length ? <EChart option={dispDestOpt} height={rowsHeight(dispDest.length, 26)} label="Dispatched cars by destination" onPick={(i) => toggle('dest', destVals(dispDest[i][0]))} />
+            : <p className="muted" style={{ padding: 12 }}>No cars dispatched for these filters.</p>}
         </ChartCard>
       </div>
       <Card title="Cars waiting to leave" sub="Open VSOs, longest wait first. Click a row for the car's full history.">

@@ -74,9 +74,9 @@ export function hBars(t, cats, series, opts = {}) {
   };
 }
 
-/** Vertical columns. opts: stacked, fmt, capLabels (bool), xFmt, tipExtra, tipFoot, selected */
+/** Vertical columns. opts: stacked, fmt, capLabels (bool, default on - labels that would overlap are skipped), xFmt, tipExtra, tipFoot, selected */
 export function columns(t, cats, series, opts = {}) {
-  const { stacked = false, fmt = int, capLabels = cats.length <= 14, xFmt = (x) => x, tipExtra, tipFoot, axisFmt = compact, rotate = 0, selected } = opts;
+  const { stacked = false, fmt = int, capLabels = true, xFmt = (x) => x, tipExtra, tipFoot, axisFmt = compact, rotate = 0, selected } = opts;
   const last = series.length - 1;
   const totals = cats.map((_, i) => series.reduce((a, s) => a + (s.data[i] || 0), 0));
   const dim = dimmer(cats, selected);
@@ -99,6 +99,7 @@ export function columns(t, cats, series, opts = {}) {
       barMaxWidth: 40, barCategoryGap: '26%', barGap: '12%',
       itemStyle: { color: s.color, borderRadius: !stacked || k === last ? [4, 4, 0, 0] : 0, borderColor: t.surface, borderWidth: stacked ? 1 : 0 },
       emphasis: { itemStyle: { opacity: 0.85 } },
+      labelLayout: { hideOverlap: true },
       label: capLabels && (!stacked ? series.length === 1 : k === last) ? {
         show: true, position: 'top', color: t.ink, fontFamily: t.fontUi, fontSize: 12, fontWeight: 700,
         formatter: (p) => fmt(stacked ? totals[p.dataIndex] : p.value),

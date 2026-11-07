@@ -21,7 +21,7 @@ Functions only deploy from Git or the Netlify CLI (not from drag and drop).
 npm install
 npx netlify-cli login
 npx netlify-cli link            # or: npx netlify-cli init  (to create a new site)
-npx netlify-cli env:set UPLOAD_KEY 17278
+npx netlify-cli env:set UPLOAD_KEY 12345
 npx netlify-cli deploy --build --prod
 ```
 Git alternative: push this folder to GitHub, then in Netlify: **Add new site > Import an existing project** >
@@ -54,14 +54,7 @@ browser into the export's columns; the queries and the join live in `src/data/ne
 1. **Keys** - set these five (Setup > Integration > Manage Integrations for the consumer key/secret, Setup > Users/Roles >
    Access Tokens for the token):
 
-   | Key | Value |
-   |---|---|
-   | `NETSUITE_ACCOUNT_ID` | account ID, e.g. `9540429` (sandbox `9540429_SB1`) |
-   | `NETSUITE_CONSUMER_KEY` / `NETSUITE_CONSUMER_SECRET` | from the integration record |
-   | `NETSUITE_TOKEN_ID` / `NETSUITE_TOKEN_SECRET` | from the access token |
-   | `UPLOAD_KEY` | `17278` |
-   | `DASHBOARD_USERS` | who can sign in: `email:salt:hash` per user, comma-separated (scrypt hash, never the plain password) |
-   | `SESSION_SECRET` | any long random string; signs the 7-day sign-in sessions |
+ 
 
    - **Locally:** they live in `.env` in the project root (git-ignored). `npm run dev` serves `/api/netsuite-sync` from
      them, so **NetSuite Data Sync** works on `localhost` without the Netlify CLI.

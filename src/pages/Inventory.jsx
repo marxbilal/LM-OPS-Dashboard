@@ -63,7 +63,6 @@ export default function Inventory() {
       reserved: stock.filter((v) => v.comm === 'Reserved (not fully paid)').length, paid: stock.filter((v) => v.comm === 'Paid - awaiting delivery').length,
       availValue: sum(stock.filter((v) => v.comm === 'Unreserved' || v.comm === 'Reserved (not fully paid)'), (v) => v.tc),
       pending: stock.filter((v) => v.locType === 'Pending Receiving').length,
-      noLanded: stock.filter((v) => v.lcs === 'Not posted - import').length,
       estimated: stock.filter((v) => v.startBasis !== 'IBV date').length,
     };
   }, [stock]);
@@ -170,11 +169,6 @@ export default function Inventory() {
           Their IBV is complete but the location wasn't updated at receipt, so stock by location under-counts the yards. Click to list them.
         </Banner>
       )}
-      {k.noLanded > 0 && (
-        <Banner tone="accent" title={`${int(k.noLanded)} imported cars in stock carry no landed cost`}>
-          Their value is purchase price only, so stock value is understated until freight, transport and clearance are posted.
-        </Banner>
-      )}
       <div className="grid-2">
         <ChartCard title="Stock by age" sub="Days since IBV, split by commercial status" table={ageTable}
           legend={COMMERCIAL.map((c, i) => ({ name: COMM_SHORT[c], color: t.series[i] }))}>
@@ -195,7 +189,7 @@ export default function Inventory() {
         </ChartCard>
       </div>
       <div className="grid-2">
-        <ChartCard title="Cars in stock at month end" sub="Rebuilt from IBV, receiving and out dates (entity, brand, model and fuel filters apply)" table={histTable}>
+        <ChartCard title="Cars in stock at month end" sub="Available, reserved and awaiting delivery" table={histTable}>
           <EChart option={histN} height={260} label="Cars in stock at month end" />
         </ChartCard>
         <ChartCard title="Average days in stock at month end" sub="Same cars as the chart on the left" table={histTable}>

@@ -30,10 +30,10 @@ const KPI_CARDS = {
 export default function PurchaseOrders() {
   const { ds } = useData();
   const t = useChartTheme();
-  const { P, meta } = ds;
+  const { P, V, meta } = ds;
   const asOf = meta.asOf;
   // month / po are chart-click selections (no dropdown)
-  const defaults = { period: [String(yearOf(asOf))], entity: [], vendor: [], route: [], status: [], brand: [], month: [], po: [], kpi: [] };
+  const defaults = { period: [String(yearOf(asOf))], entity: [], vendor: [], route: [], status: [], brand: [], month: [], po: [], kpi: [], model: [] };
   const [f, set, reset, toggle] = useFilters(defaults);
   const setF = (id, v) => { set(id, v); if (id === 'period') set('month', []); }; // a month picked on a chart may fall outside the new period
 
@@ -47,10 +47,21 @@ export default function PurchaseOrders() {
   }), [P, asOf]);
 
   const range = ymRange(f.period);
+  // PO -> models on its vehicle cards (for the model pick)
+  const poModels = useMemo(() => {
+    const m = new Map();
+    for (const v of V) {
+      if (!v.po || !v.veh) continue;
+      if (!m.has(v.po)) m.set(v.po, new Set());
+      m.get(v.po).add(v.model ?? 'Unknown');
+    }
+    return m;
+  }, [V]);
   const preds = {
     entity: pick(f.entity, (p) => p.entity), vendor: pick(f.vendor, (p) => p.vendor), route: pick(f.route, (p) => p.route),
     brand: f.brand.length ? (p) => matchAny(p.brands, f.brand) : null, status: pick(f.status, (p) => p.status),
     month: pick(f.month, (p) => monthKey(p.date)), po: pick(f.po, (p) => p.no), kpi: kpiPred(f, KPI_CARDS),
+    model: f.model.length ? (p) => f.model.some((m) => poModels.get(p.no)?.has(m)) : null,
   };
   // POs dated in the PO-date filter, every selection applied except `skip` (a chart's own dimension)
   const inPeriod = (skip) => applyPreds(P, preds, skip).filter((p) => ymMatch(p.date, f.period));
@@ -111,10 +122,31 @@ export default function PurchaseOrders() {
     { name: 'Received', data: openList.map((p) => p.received), color: t.s1 },
     { name: 'In transit', data: openList.map((p) => p.inTransit), color: t.s2 },
   ], {
-    stacked: true, catWidth: 170, endText: (i) => dayLabel(openList[i].daysSince), selected: f.po,
+    stacked: true, catWidth: 170, selected: f.po,
     tipExtra: (i) => [{ name: 'Days since PO', value: int(openList[i].daysSince) }, { name: 'Receive by', value: date(openList[i].receiveBy) }],
     tipFoot: (i) => openList[i].vendor,
   }), [t, openList, f.po]);
+
+  const openModels = useMemo(() => {
+    const open = new Set(applyPreds(P, preds, 'model').filter((p) => p.isOpen === 'Y').map((p) => p.no));
+    const m = new Map();
+    for (const v of V) {
+      if (!v.veh || !open.has(v.po)) continue;
+      const key = v.model ?? 'Unknown';
+      const e = m.get(key) || { key, brand: v.brand, n: 0, transit: 0, received: 0, pos: new Set() };
+      e.n++; if (v.inTransit) e.transit++; else e.received++; e.pos.add(v.po);
+      m.set(key, e);
+    }
+    return [...m.values()].map((e) => ({ ...e, __key: e.key, poN: e.pos.size })).sort((a, b) => b.n - a.n);
+  }, [P, V, f, poModels]);
+  const topOpenModels = [...openModels.slice(0, 15), ...openModels.slice(15).filter((e) => f.model.includes(e.key))];
+  const openModelOpt = useMemo(() => hBars(t, topOpenModels.map((e) => e.key), [
+    { name: 'Received', data: topOpenModels.map((e) => e.received), color: t.s1 },
+    { name: 'In transit', data: topOpenModels.map((e) => e.transit), color: t.s2 },
+  ], {
+    stacked: true, catWidth: 150, selected: f.model,
+    tipExtra: (i) => [{ name: 'Open POs', value: int(topOpenModels[i].poN) }], tipFoot: (i) => topOpenModels[i].brand,
+  }), [t, openModels, f.model]);
 
   // ---- vendors
   const vendors = useMemo(() => {
@@ -162,7 +194,7 @@ export default function PurchaseOrders() {
         { id: 'route', label: 'Supply route', options: opts.route },
         { id: 'status', label: 'PO status', options: opts.status },
         { id: 'brand', label: 'Brand', options: opts.brand },
-      ]} picks={[{ id: 'month', label: 'PO month', fmt: monthLabel }, { id: 'po', label: 'PO' }, { id: 'kpi', label: 'Card', fmt: (id) => KPI_CARDS[id]?.label ?? id }]} />
+      ]} picks={[{ id: 'month', label: 'PO month', fmt: monthLabel }, { id: 'po', label: 'PO' }, { id: 'model', label: 'Model' }, { id: 'kpi', label: 'Card', fmt: (id) => KPI_CARDS[id]?.label ?? id }]} />
       <div className="kpis">
         <Kpi {...kpiClick(f, set, null)} label="POs issued" value={int(k.n)} sub={`${int(k.openN)} open · ${int(k.check)} to check`} />
         <Kpi {...kpiClick(f, set, null)} label="PO value" value={aed(k.value)} sub={aedFull(k.value)} tone="money" />
@@ -187,11 +219,6 @@ export default function PurchaseOrders() {
         </ChartCard>
       </div>
       <div className="grid-2">
-        <ChartCard title="Open POs" sub={`${openList.length} POs with cars still in transit, any PO date · bar end = days since PO`}
-          legend={[{ name: 'Received', color: t.s1 }, { name: 'In transit', color: t.s2 }]}
-          table={{ columns: poCols.filter((c) => ['no', 'date', 'vendor', 'carded', 'received', 'inTransit', 'daysSince', 'receiveBy'].includes(c.key)), rows: openList, csvName: 'open-pos', search: false }}>
-          <EChart option={openOpt} height={rowsHeight(openList.length, 26)} label="Open purchase orders" onPick={(i) => toggle('po', openList[i].no)} />
-        </ChartCard>
         <ChartCard title="Top vendors by PO value" sub="POs in the selected period"
           table={{ columns: [
             { key: 'vendor', label: 'Vendor', wrap: true }, { key: 'pos', label: 'POs', align: 'r', fmt: int },
@@ -200,26 +227,44 @@ export default function PurchaseOrders() {
           ], rows: vendors.map((v) => ({ ...v, __key: v.vendor })), csvName: 'vendors' }}>
           <EChart option={vendorOpt} height={rowsHeight(topV.length, 28)} label="Top vendors by PO value" onPick={(i) => toggle('vendor', topV[i].vendor)} />
         </ChartCard>
+        <Card title="Payments against these POs" sub={k.fromBills
+          ? `All ${int(k.n)} POs in the filter, from the vendor bills in NetSuite · paid = bill payments, balance = PO value not yet paid`
+          : `Based on ${int(k.payN)} of ${int(k.n)} POs that carry the PO payment fields (filled in NetSuite only from mid-2026) - run NetSuite Data Sync to use the vendor bills for every PO`}>
+          <div style={{ padding: '6px 6px 4px', display: 'grid', gap: 10 }}>
+            <div className="meter" style={{ height: 12 }} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={paidShare != null ? Math.round(paidShare * 100) : 0} aria-label="Share paid">
+              <i style={{ width: `${(paidShare || 0) * 100}%` }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <span><b className="num">{aed(k.paid)}</b> <span className="muted">paid ({pct(paidShare, 0)})</span></span>
+              <span><b className="num">{aed(k.balance)}</b> <span className="muted">balance to pay</span></span>
+            </div>
+            {k.fromBills && k.balance > 0 && (
+              <span className="muted" style={{ fontSize: 12.5 }}>
+                Of the balance: <b className="num">{aed(k.unpaid)}</b> billed, not yet paid · <b className="num">{aed(Math.max(0, k.balance - k.unpaid))}</b> not yet billed
+              </span>
+            )}
+            {k.inconsistent > 0 && <Chip tone="warn">{int(k.inconsistent)} POs where paid + balance differ from the PO total</Chip>}
+          </div>
+        </Card>
       </div>
-      <Card title="Payments against these POs" sub={k.fromBills
-        ? `All ${int(k.n)} POs in the filter, from the vendor bills in NetSuite · paid = bill payments, balance = PO value not yet paid`
-        : `Based on ${int(k.payN)} of ${int(k.n)} POs that carry the PO payment fields (filled in NetSuite only from mid-2026) - run NetSuite Data Sync to use the vendor bills for every PO`}>
-        <div style={{ padding: '6px 6px 4px', display: 'grid', gap: 10 }}>
-          <div className="meter" style={{ height: 12 }} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={paidShare != null ? Math.round(paidShare * 100) : 0} aria-label="Share paid">
-            <i style={{ width: `${(paidShare || 0) * 100}%` }} />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-            <span><b className="num">{aed(k.paid)}</b> <span className="muted">paid ({pct(paidShare, 0)})</span></span>
-            <span><b className="num">{aed(k.balance)}</b> <span className="muted">balance to pay</span></span>
-          </div>
-          {k.fromBills && k.balance > 0 && (
-            <span className="muted" style={{ fontSize: 12.5 }}>
-              Of the balance: <b className="num">{aed(k.unpaid)}</b> billed, not yet paid · <b className="num">{aed(Math.max(0, k.balance - k.unpaid))}</b> not yet billed
-            </span>
-          )}
-          {k.inconsistent > 0 && <Chip tone="warn">{int(k.inconsistent)} POs where paid + balance differ from the PO total</Chip>}
-        </div>
-      </Card>
+      <div className="grid-2">
+        <ChartCard title="Open POs" sub={`${openList.length} POs with cars still in transit, any PO date`}
+          legend={[{ name: 'Received', color: t.s1 }, { name: 'In transit', color: t.s2 }]}
+          table={{ columns: poCols.filter((c) => ['no', 'date', 'vendor', 'carded', 'received', 'inTransit', 'daysSince', 'receiveBy'].includes(c.key)), rows: openList, csvName: 'open-pos', search: false }}>
+          <EChart option={openOpt} height={rowsHeight(openList.length, 26)} label="Open purchase orders" onPick={(i) => toggle('po', openList[i].no)} />
+        </ChartCard>
+        <ChartCard title="Models on open POs"
+          sub={`${int(openModels.length)} models · ${int(sum(openModels, (e) => e.n))} cars on the open POs${openModels.length > topOpenModels.length ? ` - top ${topOpenModels.length} shown, switch to Table for all` : ''}`}
+          legend={[{ name: 'Received', color: t.s1 }, { name: 'In transit', color: t.s2 }]}
+          table={{ columns: [
+            { key: 'key', label: 'Model' }, { key: 'brand', label: 'Brand' }, { key: 'n', label: 'Cars', align: 'r', fmt: int },
+            { key: 'received', label: 'Received', align: 'r', fmt: int }, { key: 'transit', label: 'In transit', align: 'r', fmt: int },
+            { key: 'poN', label: 'Open POs', align: 'r', fmt: int, total: false },
+          ], rows: openModels, csvName: 'models-on-open-pos' }}>
+          {topOpenModels.length ? <EChart option={openModelOpt} height={rowsHeight(topOpenModels.length, 26)} label="Models on open POs" onPick={(i) => toggle('model', topOpenModels[i].key)} />
+            : <p className="muted" style={{ padding: 12 }}>No open POs for these filters.</p>}
+        </ChartCard>
+      </div>
       <Card title="Purchase orders" sub="Partly received first, then in transit, then the rest (newest first within each). Click a column to sort; dates and amounts download as shown.">
         <DataTable columns={poCols} rows={posByDate} csvName="purchase-orders" initialSort={{ key: 'status', dir: 1 }}
           filters={[{ key: 'status', label: 'Status', options: opts.status }]} />

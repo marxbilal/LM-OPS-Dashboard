@@ -34,7 +34,16 @@ export function timeAxis(from, to, prefer) {
     return { unit, keys, keyOf: (d) => d, label: (k) => date(k).slice(0, 6) };
   }
   for (let d = weekStart(from); d <= to; d += 7) keys.push(d);
-  return { unit, keys, keyOf: (d) => weekStart(d), label: (k) => `w/c ${date(k).slice(0, 6)}` };
+  return { unit, keys, keyOf: (d) => weekStart(d), label: weekLabel };
+}
+
+/**
+ * "Week 2 Jan 26": weeks run Monday to Sunday and belong to the month their Thursday falls in, numbered from 1 within
+ * that month (so a month with five Thursdays has a Week 5).
+ */
+export function weekLabel(monday) {
+  const thu = Number(monday) + 3; // chart axes pass the category as text
+  return `Week ${Math.floor((new Date(thu * DAY).getUTCDate() - 1) / 7) + 1} ${monthLabel(monthKey(thu))}`;
 }
 
 export function clampRange(r, rows, f, asOf) {
