@@ -8,7 +8,7 @@ export const FORMAT = 'lm-scm-dataset/1';
 const V_FIELDS = ['id', 'ch', 'chRaw', 'brand', 'model', 'trim', 'my', 'fuel', 'entity', 'loc', 'locType', 'site', 'vs', 'ss',
   'stage', 'comm', 'group', 'po', 'poDate', 'vendor', 'route', 'ship', 'ibv', 'ibvStatus', 'ibvDate', 'recv', 'purchaseDate',
   'start', 'startBasis', 'pp', 'lc', 'tc', 'lcs', 'vst', 'vstDate', 'cust', 'rep', 'destRaw', 'destC', 'destT', 'out',
-  'outPrice', 'flags', 'cards', 'seq', 'veh', 'vin', 'color', 'modelCode'];
+  'outPrice', 'flags', 'cards', 'seq', 'veh', 'vin', 'color', 'modelCode', 'lcMix', 'lcSrc'];
 const S_FIELDS = ['no', 'status', 'stage', 'entity', 'ibv', 'ibvStatus', 'route', 'pos', 'vendors', 'brands', 'mainModel', 'units',
   'unitsHdr', 'containers', 'mode', 'bl', 'blSource', 'vessel', 'pol', 'polC', 'pod', 'podC', 'poDate', 'created', 'etd', 'atd',
   'eta', 'etaSource', 'ata', 'recv', 'receiveBy', 'copied', 'dPoShip', 'dShipRecv', 'dPoRecv', 'rVsEta', 'ataVsEta', 'rVsRb',

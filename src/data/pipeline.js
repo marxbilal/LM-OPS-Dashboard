@@ -5,6 +5,7 @@
 // Pure module: runs in the browser worker and in Node (for tests).
 
 import { LOCATION_MAP, JUNK, BRAND_MAP, cleanPort, cleanDestination } from './lookups.js';
+import { lcCatLabel } from './landed.js';
 
 export const DAY = 86400000;
 export const PIPELINE_VERSION = 1;
@@ -181,7 +182,7 @@ export function deriveVehicles(V, asOf) {
 // ================================================================== main
 export function buildDataset(input, opts = {}) {
   const t0 = Date.now();
-  const { header, rows, landed, bills } = input;
+  const { header, rows, landed, bills, lcSheet } = input;
   const today = Math.floor((opts.now ?? Date.now()) / DAY);
   const focusYear = opts.focusYear ?? null; // default: year of as-of date
   const errors = [], warnings = [];
@@ -255,7 +256,7 @@ export function buildDataset(input, opts = {}) {
     let fixed = false;
     if (ch.length === 17 && /[IOQ]/.test(ch)) { ch = ch.replace(/I/g, '1').replace(/[OQ]/g, '0'); fixed = true; ioq++; }
     const modelU = String(o.Model ?? '').toUpperCase();
-    const isNonVeh = /CHARGER|FORKLIFT|SPARE PART/.test(modelU) || /SPAREPART|CHARGER/.test(ch);
+    const isNonVeh = /CHARGER|FORKLIFT|SPARE PART|ROBOT/.test(modelU) || /SPAREPART|CHARGER/.test(ch) || ch === 'ROBOT';
     if (isNonVeh) nonVeh++;
     const vin = /^[A-HJ-NPR-Z0-9]{17}$/.test(ch) && !isNonVeh;
     if (!vin && !isNonVeh) { invalidVin++; if (invalidExamples.length < 4) invalidExamples.push(String(chRaw)); }
@@ -342,6 +343,24 @@ export function buildDataset(input, opts = {}) {
     v.outBeforeArrival = v.dispatched && v.out != null && v.start != null && v.out < v.start;
   }
 
+  // ---------- landed-cost types: NetSuite's IBV landed-cost lines and the landed cost sheet share one list
+  const lcCats = [], lcCi = new Map();
+  const catIndex = (c) => { if (!lcCi.has(c)) { lcCi.set(c, lcCats.length); lcCats.push(c); } return lcCi.get(c); };
+  if (Array.isArray(landed)) for (const l of landed) catIndex(lcCatLabel(l.cat));
+  // The landed cost sheet (until the NetSuite role can read the landed-cost journals), by card internal ID.
+  // Matched by card only: a car re-carded to a sister company carries the landed cost inside its new purchase price.
+  const sheet = lcSheet?.cards?.length ? new Map() : null;
+  if (sheet) {
+    const remap = lcSheet.cats.map((c) => catIndex(lcCatLabel(c)));
+    for (const [id, ...pairs] of lcSheet.cards) {
+      const mix = [];
+      let sum = 0;
+      for (let i = 0; i < pairs.length; i += 2) { mix.push(remap[pairs[i]], pairs[i + 1]); sum += pairs[i + 1]; }
+      sheet.set(id, { mix, sum });
+    }
+  }
+  let shMatched = 0, shFilled = 0, shFilledAED = 0;
+
   // ---------- costs
   let tcChecked = 0, tcBad = 0;
   const tcExamples = [];
@@ -349,6 +368,16 @@ export function buildDataset(input, opts = {}) {
     if (v.tc != null) {
       tcChecked++;
       if (Math.abs(v.tc - ((v.pp ?? 0) + (v.lc ?? 0))) > 1) { tcBad++; if (tcExamples.length < 5) tcExamples.push(v.id); }
+    }
+    const sh = sheet?.get(v.id);
+    if (sh) {
+      shMatched++;
+      if (sh.sum > 0) v.lcMix = sh.mix;
+      // the landed cost on the card (NetSuite) wins; the sheet only fills cards that have none
+      if (!(v.lc > 0) && sh.sum > 0 && v.veh) {
+        v.lc = Math.round(sh.sum * 100) / 100; v.tc = (v.pp ?? 0) + v.lc; v.lcSrc = 'Landed cost sheet';
+        shFilled++; shFilledAED += v.lc;
+      }
     }
     const vu = String(v.vendor ?? '').toUpperCase();
     v.route = !v.po ? 'No PO (transfer / internal / legacy)' : (UAE_VENDOR.test(vu) || v.poCcy === 'AED') ? 'Local (UAE vendor)' : 'Import (overseas vendor)';
@@ -396,7 +425,7 @@ export function buildDataset(input, opts = {}) {
   const sg = new Map();
   R.forEach((o, i) => {
     const no = o['Shipment No'];
-    if (!no) return;
+    if (!no || !V[i].veh) return; // spare parts, chargers etc. are not cars: their shipments are left out
     if (!sg.has(no)) sg.set(no, { h: {}, rows: [] });
     const g = sg.get(no);
     for (const c of shipHdr) if (g.h[c] == null && o[c] != null) g.h[c] = o[c];
@@ -472,7 +501,7 @@ export function buildDataset(input, opts = {}) {
   const pg = new Map();
   R.forEach((o, i) => {
     const no = o['PO #'];
-    if (!no) return;
+    if (!no || !V[i].veh) return; // spare-parts POs are not car purchases
     if (!pg.has(no)) pg.set(no, { h: {}, rows: [] });
     const g = pg.get(no);
     for (const c of poHdr) if (g.h[c] == null && o[c] != null) g.h[c] = o[c];
@@ -549,26 +578,25 @@ export function buildDataset(input, opts = {}) {
   log.push(['Purchase orders', `${P.length.toLocaleString()} POs built; PO totals converted to AED, 5% VAT detected on AED POs, carded value compared with PO value`]);
   if (billsByPo) log.push(['Payments', `${bills.length.toLocaleString()} vendor bills against ${billsByPo.size.toLocaleString()} POs - paid and balance per PO come from the bills`]);
 
-  // ================================================================ landed-cost split (NetSuite sync only)
-  // IBV landed-cost lines -> { cats, byIbv: { 'IBV-03236': [AED per cat] } }. A car's posted landed cost is later
-  // split in its IBV's proportions, so the split always adds up to the landed cost shown elsewhere.
+  // ================================================================ landed-cost split
+  // { cats, byIbv: { 'IBV-03236': [AED per cat] } } from NetSuite's IBV landed-cost lines (sync only); cars in the landed
+  // cost sheet carry their own split (v.lcMix). Either way a car's landed cost is split in proportion, so the parts
+  // always add up to the landed cost shown elsewhere.
   let LC = null;
-  if (Array.isArray(landed) && landed.length) {
-    const label = (c) => String(c ?? 'Uncategorised').replace(/^Landed Cost\s*-\s*/i, '').trim() || 'Uncategorised';
-    const tot = new Map();
-    for (const l of landed) { const c = label(l.cat); tot.set(c, (tot.get(c) || 0) + (toNum(l.aed) || 0)); }
-    const cats = [...tot.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
-    const ci = new Map(cats.map((c, i) => [c, i]));
+  if (lcCats.length) {
     const byIbv = {};
-    for (const l of landed) {
+    for (const l of Array.isArray(landed) ? landed : []) {
       const amt = toNum(l.aed);
       if (!l.ibv || !amt) continue;
-      const a = byIbv[l.ibv] || (byIbv[l.ibv] = cats.map(() => 0));
-      a[ci.get(label(l.cat))] += amt;
+      const a = byIbv[l.ibv] || (byIbv[l.ibv] = lcCats.map(() => 0));
+      a[lcCi.get(lcCatLabel(l.cat))] += amt;
     }
     for (const k of Object.keys(byIbv)) byIbv[k] = byIbv[k].map((x) => Math.round(x * 100) / 100);
-    LC = { cats, byIbv };
-    log.push(['Landed cost split', `${landed.length.toLocaleString()} IBV landed-cost lines in ${cats.length} categories (${cats.join(', ')}) across ${Object.keys(byIbv).length.toLocaleString()} IBVs`]);
+    LC = { cats: lcCats, byIbv };
+    if (landed?.length) log.push(['Landed cost split', `${landed.length.toLocaleString()} IBV landed-cost lines across ${Object.keys(byIbv).length.toLocaleString()} IBVs; cost types: ${lcCats.join(', ')}`]);
+  }
+  if (sheet) {
+    log.push(['Landed cost sheet', `${lcSheet.lines.toLocaleString()} lines from ${lcSheet.fileName || 'the landed cost sheet'} for ${sheet.size.toLocaleString()} cards: ${shMatched.toLocaleString()} matched by card number; landed cost filled on ${shFilled.toLocaleString()} cards that had none (AED ${Math.round(shFilledAED).toLocaleString()}); the rest keep the value on the card and take their cost-type split from the sheet`]);
   }
 
   // ================================================================ validation report
@@ -625,7 +653,8 @@ export function buildDataset(input, opts = {}) {
       open: S.filter((s) => s.status === 'In transit').length,
     },
     landed: { focusYear: FY, importsReceivedPosted: posted, importsNotPosted: notPosted, coverage: posted + notPosted ? posted / (posted + notPosted) : null,
-      inStockImportsNoLanded: inStock.filter((v) => v.lcs === 'Not posted - import').length },
+      inStockImportsNoLanded: inStock.filter((v) => v.lcs === 'Not posted - import').length,
+      sheet: sheet ? { fileName: lcSheet.fileName ?? null, lines: lcSheet.lines, cards: sheet.size, matched: shMatched, filled: shFilled, filledAED: shFilledAED } : null },
     ageing: { inStock: inStock.length, estimated: ageEstimated },
     stages: stageCounts,
     dates: { min: isFinite(dMin) ? dMin : null, max: isFinite(dMax) ? dMax : null, asOf },

@@ -22,14 +22,16 @@ async function runHere(message, onProgress) {
   // Fallback when workers are blocked: same code on the main thread (the page pauses while it runs).
   const mod = await import('./parse.worker.js');
   await new Promise((r) => setTimeout(r, 30));
+  if (message.kind === 'lcsheet') return mod.processLcSheet(message.buffer, message.fileName, onProgress);
+  if (message.kind === 'xlsx') return { bytes: await mod.buildOfflineXlsx(message.header, message.rows, message.extras, onProgress) };
   return message.kind === 'file'
-    ? mod.processFile(message.buffer, message.fileName, message.now, onProgress)
+    ? mod.processFile(message.buffer, message.fileName, message.now, onProgress, message.extras)
     : mod.processRows(message.header, message.rows, message.now, message.label, onProgress, message.extras);
 }
 
 async function run(message, onProgress) {
   try { return await runInWorker(message, onProgress); } catch (e) {
-    if (/could not be processed|Missing|No rows/.test(e.message)) throw e;
+    if (/could not be processed|Missing|No rows|landed cost sheet|landed-cost lines/.test(e.message)) throw e;
     console.warn('Worker unavailable, processing on the main thread:', e);
     return runHere(message, onProgress);
   }
@@ -37,12 +39,21 @@ async function run(message, onProgress) {
 
 export const MAX_MB = 75;
 
-export async function processUpload(file, onProgress) {
+/** extras: { lcSheet } - the landed cost sheet, applied to the export too. */
+export async function processUpload(file, onProgress, extras) {
   if (!/\.(xlsx|xlsm|xls|csv)$/i.test(file.name)) throw new Error('Use an .xlsx, .xlsm or .csv export from NetSuite.');
   if (file.size > MAX_MB * 1024 * 1024) throw new Error(`The file is ${(file.size / 1048576).toFixed(0)} MB - the limit is ${MAX_MB} MB.`);
   onProgress?.('Opening the file', 0.03);
   const buffer = await file.arrayBuffer();
-  return run({ kind: 'file', buffer, fileName: file.name, now: Date.now() }, onProgress);
+  return run({ kind: 'file', buffer, fileName: file.name, now: Date.now(), extras }, onProgress);
+}
+
+/** Read the landed cost sheet: { sheet } (see parseLandedSheet). */
+export async function readLcSheet(file, onProgress) {
+  if (!/.(xlsx|xlsm|xls|csv)$/i.test(file.name)) throw new Error('Use the landed cost sheet as an .xlsx or .csv file.');
+  if (file.size > MAX_MB * 1024 * 1024) throw new Error(`The file is ${(file.size / 1048576).toFixed(0)} MB - the limit is ${MAX_MB} MB.`);
+  const buffer = await file.arrayBuffer();
+  return run({ kind: 'lcsheet', buffer, fileName: file.name }, onProgress);
 }
 
 const NOT_CONNECTED = 'NetSuite sync is not connected on this site yet. Upload the export file instead.';
@@ -88,6 +99,12 @@ export async function pullNetSuite(key, onProgress) {
   const tables = Object.fromEntries(names.map((n) => [n, pages[n].flat()]));
   const { header, rows, extras } = mergeTables(tables);
   return { header, rows, extras, total: rows.length };
+}
+
+/** The .xlsx offline copy of a pull ({ header, rows, extras } from pullNetSuite). Returns the file bytes. */
+export async function buildOfflineCopy(pull, onProgress) {
+  const out = await run({ kind: 'xlsx', header: pull.header, rows: pull.rows, extras: pull.extras }, onProgress);
+  return out.bytes;
 }
 
 /** extras: NetSuite-only data beside the rows ({ landed, bills }), see mergeTables. */

@@ -34,6 +34,24 @@ export async function saveFile(filename, text, mime = 'text/csv;charset=utf-8') 
   return true;
 }
 
+/** Save binary file bytes (e.g. an .xlsx) as they are. */
+export async function saveBytes(filename, bytes, mime = 'application/octet-stream') {
+  const blob = new Blob([bytes], { type: mime });
+  const cap = await downloadsCap();
+  if (cap) {
+    try { await cap.save({ filename, data: blob }); return true; } catch (e) {
+      if (e?.code !== 'declined') console.warn('Download not saved:', e?.code || e);
+      return false;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return true;
+}
+
 export function toCSV(columns, rows) {
   const q = (v) => {
     if (v == null) return '';

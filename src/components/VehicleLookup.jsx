@@ -101,7 +101,7 @@ export function VehicleDrawer({ vehicle, onClose }) {
             <div><small>{v.inStock ? 'Days in stock' : v.inTransit ? 'Days since IBV' : 'Days stock to dispatch'}</small>
               <strong>{v.inStock ? int(v.days) : v.inTransit ? int(v.daysTransit) : v.dStockDisp != null ? int(v.dStockDisp) : '-'}</strong></div>
             <div><small>Purchase cost</small><strong>{aedFull(v.pp)}</strong></div>
-            <div><small>Landed cost</small><strong>{v.lc > 0 ? `${aedFull(v.lc)} (${pct(v.lcPct)})` : v.lcs}</strong></div>
+            <div><small>Landed cost</small><strong>{v.lc > 0 ? `${aedFull(v.lc)} (${pct(v.lcPct)})${v.lcSrc ? " - from the landed cost sheet" : ""}` : v.lcs}</strong></div>
             <div><small>Total cost</small><strong>{aedFull(v.tc)}</strong></div>
             <div><small>Internal ID</small><strong>{v.id}</strong></div>
           </div>

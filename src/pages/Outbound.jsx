@@ -32,7 +32,6 @@ export default function Outbound() {
     res: { label: 'Reserved, not fully paid', test: (v) => v.comm === RES },
     disp: { label: 'Dispatched', test: (v) => v.dispatched },
     posted: { label: 'Dispatched imports with landed cost posted', test: (v) => v.dispatched && v.route === IMPORT && v.lcs === 'Posted' },
-    postedAll: { label: 'Dispatched cars with landed cost posted', test: (v) => v.dispatched && v.lcs === 'Posted' },
   };
   const relevant = useMemo(() => V.filter((v) => v.openVso || v.dispatched), [V]);
   const opts = useMemo(() => ({
@@ -71,7 +70,6 @@ export default function Outbound() {
       disp: disp.length, perWeek: disp.length / span,
       vstToDisp: avg(disp, (v) => v.dVstDisp),
       avgLC: avg(posted, (v) => v.lc), imp: imp.length, posted: posted.length,
-      postedAll: disp.filter((v) => v.lcs === 'Posted').length,
     };
   }, [open, disp, V, f, asOf, range.from, range.to]);
 
@@ -157,8 +155,8 @@ export default function Outbound() {
         <Kpi {...kpiClick(f, set, null)} label="Order to dispatch" value={dec(k.vstToDisp, 0)} unit="days avg" sub="VST date to out date" />
         <Kpi {...kpiClick(f, set, 'posted')} label="Avg landed cost" value={aed(k.avgLC)} tone="money"
           sub={`Per dispatched import where posted · ${int(k.posted)} of ${int(k.imp)} imports`} />
-        <Kpi {...kpiClick(f, set, 'postedAll')} label="Landed cost posted" value={pct(k.disp ? k.postedAll / k.disp : null, 0)}
-          sub={`${int(k.postedAll)} of ${int(k.disp)} dispatched cars`} />
+        <Kpi {...kpiClick(f, set, 'posted')} label="Landed cost posted" value={pct(k.imp ? k.posted / k.imp : null, 0)}
+          sub={`Imports only: ${int(k.posted)} of ${int(k.imp)} dispatched imports`} />
       </div>
       <div className="grid-2">
         <ChartCard title={`Cars dispatched per ${flow.ax.unit}`} sub="Completed dispatches by out date. Planned dispatches need a planned date in NetSuite."

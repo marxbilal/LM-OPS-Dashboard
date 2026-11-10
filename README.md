@@ -64,6 +64,20 @@ browser into the export's columns; the queries and the join live in `src/data/ne
    vehicle custom records, purchase orders and inbound shipments. Keep the token user's date format `DD/MM/YYYY`.
 3. **PO Location** is not pulled (it sits on the PO line and that join is too slow); the validation report lists it as a
    missing optional column.
+4. **Offline copy** - after every accepted sync the pull is also saved as a compressed `.xlsx` (sheets: Vehicles,
+   Vendor bills, IBV landed cost; about 15 MB), replacing the previous copy. It is kept in Netlify Blobs next to the
+   dataset (`/api/dataset?backup=1`), or in this browser when the site has no functions, and is downloaded from
+   **Upload Data > Offline copy of the last NetSuite pull**. The file is written by `src/data/xlsxWriter.js`.
+5. **Landed cost sheet** (temporary, until the token's role can read the landed-cost journals) - **Upload Data > Landed
+   cost sheet** takes the journal-line export (Vehicle Card `STK<Internal ID>`, Chassis Number, Date, Currency,
+   Memo `Landed Cost-<type>|<IBV>`, Amount (Debit)). It is parsed per card and cost type (`parseLandedSheet` in
+   `src/data/landed.js`), kept next to the dataset (`/api/dataset?file=lcsheet`) and applied on every sync or file upload:
+   - matched by **card number only** - a car re-carded to a sister company already carries the landed cost inside its
+     new purchase price, so matching by chassis would count it twice;
+   - the **landed cost on the card wins**; the sheet only fills cards that have none (Total Cost = purchase + landed);
+   - every matched car's landed cost is **split by type** from its own lines (Clearing, Port Handling, Ocean Freight...),
+     scaled to the card's value; other cars keep their IBV's proportions. USD lines are converted at 3.6725.
+   Uploading a sheet replaces the previous one and re-runs the sync; **Remove** goes back to the cards only.
 
 ## Data rules (agreed)
 

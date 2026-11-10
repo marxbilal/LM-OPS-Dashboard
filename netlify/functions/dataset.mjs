@@ -5,6 +5,13 @@
 // POST /api/dataset?commit=1             -> make a version live   (needs x-upload-key)
 // GET  /api/dataset?settings=1           -> shared dashboard settings ({ hiddenPages })
 // PUT  /api/dataset?settings=1           -> save them                 (needs x-upload-key)
+// Stored files, one copy each (a new one replaces the last): file=backup  -> offline copy of the last NetSuite pull (.xlsx)
+//                                                             file=lcsheet -> the landed cost sheet (parsed, gzip JSON)
+// GET    /api/dataset?file=f                      -> pointer ({ version, parts, savedAt, ...info }) or { empty: true }
+// GET    /api/dataset?file=f&version=v&part=i     -> one part of the file
+// PUT    /api/dataset?file=f&version=v&part=i     -> upload a part                       (needs x-upload-key)
+// POST   /api/dataset?file=f                      -> make it the current copy           (needs x-upload-key)
+// DELETE /api/dataset?file=f                      -> remove it                          (needs x-upload-key)
 // Every request needs a signed-in session (Authorization: Bearer <token> from /api/login).
 import { getStore } from '@netlify/blobs';
 import { verifySession } from '../lib/auth.mjs';
@@ -13,6 +20,7 @@ const uploadKey = () => process.env.UPLOAD_KEY || '17278';
 const VERSION = /^[a-z0-9-]{4,40}$/;
 const PAGES = ['po', 'inbound', 'inventory', 'outbound', 'costs'];
 const PART = /^\d{1,3}$/;
+const FILES = ['backup', 'lcsheet'];
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -35,6 +43,9 @@ export async function handle(req, store, env = process.env) {
     await store.setJSON('settings', { hiddenPages, savedAt: new Date().toISOString() });
     return json({ ok: true, hiddenPages });
   }
+
+  const file = url.searchParams.get('file');
+  if (file != null) return FILES.includes(file) ? storedFile(req, store, file, version, part) : json({ error: 'Bad request' }, 400);
 
   if (req.method === 'GET') {
     if (version != null || part != null) {
@@ -79,6 +90,54 @@ export async function handle(req, store, env = process.env) {
     return json({ ok: true });
   }
 
+  return json({ error: 'Method not allowed' }, 405);
+}
+
+// Stored files (offline copy, landed cost sheet), kept in parts like the dataset; each new copy replaces the last.
+const NUM_INFO = ['bytes', 'rows', 'bills', 'landed', 'lines', 'cards'];
+async function storedFile(req, store, name, version, part) {
+  const current = `${name}-current`, key = (v, i) => `${name}/${v}/part-${i}`;
+  const dropParts = async (p) => {
+    for (let i = 0; i < (p?.parts || 0); i++) { try { await store.delete(key(p.version, i)); } catch { /* best effort */ } }
+  };
+  if (req.method === 'GET') {
+    if (version == null && part == null) return json((await store.get(current, { type: 'json' })) || { empty: true });
+    if (!VERSION.test(version || '') || !PART.test(part || '')) return json({ error: 'Bad request' }, 400);
+    const buf = await store.get(key(version, part), { type: 'arrayBuffer' });
+    if (!buf) return json({ error: 'Not found' }, 404);
+    return new Response(buf, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'private, max-age=31536000, immutable', 'x-lm-store': '1' } });
+  }
+  if (req.headers.get('x-upload-key') !== uploadKey()) return json({ error: 'Wrong upload key' }, 403);
+  if (req.method === 'PUT') {
+    if (!VERSION.test(version || '') || !PART.test(part || '')) return json({ error: 'Bad request' }, 400);
+    const body = await req.arrayBuffer();
+    if (body.byteLength === 0 || body.byteLength > 5.5 * 1024 * 1024) return json({ error: 'Part size not accepted' }, 413);
+    await store.set(key(version, part), body);
+    return json({ ok: true });
+  }
+  if (req.method === 'POST') {
+    let b;
+    try { b = await req.json(); } catch { return json({ error: 'Bad request' }, 400); }
+    if (!VERSION.test(b.version || '') || !(b.parts >= 1 && b.parts <= 50)) return json({ error: 'Bad request' }, 400);
+    for (let i = 0; i < b.parts; i++) {
+      if (!(await store.getMetadata(key(b.version, i)))) return json({ error: `Part ${i + 1} is missing` }, 400);
+    }
+    const previous = await store.get(current, { type: 'json' });
+    const info = Object.fromEntries(NUM_INFO.filter((k) => Number.isFinite(Number(b[k])) && b[k] != null).map((k) => [k, Number(b[k])]));
+    await store.setJSON(current, {
+      version: b.version, parts: b.parts, ...info,
+      fileName: typeof b.fileName === 'string' ? b.fileName.replace(/[^\w. -]/g, '').slice(0, 80) : `${name}.bin`,
+      savedAt: new Date().toISOString(),
+    });
+    if (previous?.version && previous.version !== b.version) await dropParts(previous);
+    return json({ ok: true });
+  }
+  if (req.method === 'DELETE') {
+    const previous = await store.get(current, { type: 'json' });
+    await store.delete(current);
+    await dropParts(previous);
+    return json({ ok: true });
+  }
   return json({ error: 'Method not allowed' }, 405);
 }
 

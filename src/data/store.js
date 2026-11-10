@@ -139,6 +139,99 @@ export async function saveDataset(packed, key, onProgress, opts = {}) {
   return { mode: 'local' };
 }
 
+// Stored files, one copy each (a new one replaces the last): the offline copy of the last NetSuite pull (.xlsx)
+// and the landed cost sheet. Shared store when the site has functions, otherwise this browser's IndexedDB.
+const newVersion = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+/** Save a stored file. info: small facts shown on Upload Data ({ fileName, rows, lines, ... }). */
+async function saveStored(name, bytes, info, key, onProgress) {
+  const rs = await remoteStatus();
+  if (!rs.available) {
+    const ok = await idbSet(name, { bytes, ...info, bytesLength: bytes.length, savedAt: new Date().toISOString() });
+    if (!ok) throw new Error('This browser blocked local storage, so the file was not kept.');
+    onProgress?.(1);
+    return { mode: 'local' };
+  }
+  const version = newVersion();
+  const parts = Math.max(1, Math.ceil(bytes.length / CHUNK));
+  for (let i = 0; i < parts; i++) {
+    const r = await authFetch(`${API}?file=${name}&version=${version}&part=${i}`, {
+      method: 'PUT', headers: { 'content-type': 'application/octet-stream', 'x-upload-key': key },
+      body: bytes.slice(i * CHUNK, (i + 1) * CHUNK),
+    });
+    if (r.status === 403) throw new Error('The shared store refused the upload key.');
+    if (!r.ok) throw new Error(`Saving part ${i + 1} of ${parts} failed (${r.status}).`);
+    onProgress?.((i + 1) / (parts + 1));
+  }
+  const c = await authFetch(`${API}?file=${name}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-upload-key': key },
+    body: JSON.stringify({ version, parts, bytes: bytes.length, ...info }),
+  });
+  if (!c.ok) throw new Error(`Saving the file failed (${c.status}).`);
+  onProgress?.(1);
+  return { mode: 'shared' };
+}
+
+/** What is stored under this name ({ fileName, savedAt, bytes, ... }) or null. */
+async function storedInfo(name) {
+  try {
+    const r = await authFetch(`${API}?file=${name}`, { cache: 'no-store' });
+    if (r.ok && r.headers.get('x-lm-store') === '1') {
+      const j = await r.json();
+      return j.empty ? null : { ...j, shared: true };
+    }
+  } catch { /* no shared store */ }
+  const local = await idbGet(name);
+  if (!local) return null;
+  const { bytes, bytesLength, ...rest } = local;
+  return { ...rest, bytes: bytesLength, shared: false };
+}
+
+/** The stored file's bytes (info from storedInfo). */
+async function loadStored(name, info) {
+  if (!info?.shared) return (await idbGet(name))?.bytes || null;
+  const cached = await idbGet(`${name}:cache`);
+  if (cached?.version === info.version) return cached.bytes;
+  const parts = [];
+  for (let i = 0; i < info.parts; i++) {
+    const r = await authFetch(`${API}?file=${name}&version=${encodeURIComponent(info.version)}&part=${i}`);
+    if (!r.ok) throw new Error(`Could not download part ${i + 1} of the file.`);
+    parts.push(new Uint8Array(await r.arrayBuffer()));
+  }
+  const all = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+  let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
+  if (name !== 'backup') idbSet(`${name}:cache`, { version: info.version, bytes: all }); // small files only
+  return all;
+}
+
+async function removeStored(name, key) {
+  const rs = await remoteStatus();
+  if (rs.available) {
+    const r = await authFetch(`${API}?file=${name}`, { method: 'DELETE', headers: { 'x-upload-key': key } });
+    if (r.status === 403) throw new Error('The shared store refused the upload key.');
+    if (!r.ok) throw new Error(`Removing the file failed (${r.status}).`);
+  } else await idbSet(name, null);
+}
+
+// Offline copy: the last NetSuite pull as a compressed .xlsx (each sync replaces it).
+export const saveBackup = (bytes, info, key, onProgress) => saveStored('backup', bytes, info, key, onProgress);
+export const backupInfo = () => storedInfo('backup');
+export const loadBackup = (info) => loadStored('backup', info);
+
+// Landed cost sheet (until the NetSuite role can read the landed-cost journals): parsed per card, kept as gzip JSON.
+export async function saveLcSheet(sheet, key) {
+  const { bytes } = await gzip(JSON.stringify(sheet));
+  return saveStored('lcsheet', bytes, { fileName: sheet.fileName, lines: sheet.lines, cards: sheet.cards.length }, key);
+}
+export const lcSheetInfo = () => storedInfo('lcsheet');
+export async function loadLcSheet(info) {
+  const i = info === undefined ? await storedInfo('lcsheet') : info;
+  if (!i) return null;
+  const bytes = await loadStored('lcsheet', i);
+  return bytes ? JSON.parse(await gunzipToText(bytes, bytes[0] === 0x1f && bytes[1] === 0x8b ? 'gzip' : 'identity')) : null;
+}
+export const removeLcSheet = (key) => removeStored('lcsheet', key);
+
 // Dashboard settings (which pages are hidden). Shared through the dataset function so every viewer gets
 // the same menu; falls back to this browser when the site has no functions.
 const SETTINGS_KEY = 'lm-scm-settings';

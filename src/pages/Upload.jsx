@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useData } from '../context.js';
-import { processUpload, pullNetSuite, processRows, MAX_MB } from '../data/ingest.js';
-import { saveDataset, saveSettings } from '../data/store.js';
-import { saveFile, toCSV } from '../components/download.js';
+import { processUpload, pullNetSuite, processRows, buildOfflineCopy, readLcSheet, MAX_MB } from '../data/ingest.js';
+import { saveDataset, saveSettings, saveBackup, backupInfo, loadBackup, saveLcSheet, lcSheetInfo, loadLcSheet, removeLcSheet } from '../data/store.js';
+import { saveFile, saveBytes, toCSV } from '../components/download.js';
 import { Banner, Card, Chip, Icon } from '../components/ui.jsx';
 import { int, pct, date, dateTime, timeAgo, plural } from '../format.js';
 
@@ -43,6 +43,13 @@ function Lock({ onUnlock }) {
   );
 }
 
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const stamp = (d = new Date()) => {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+};
+const mb = (b) => (b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+
 function Check({ tone = 'good', title, children }) {
   return <div className={`check ${tone === 'good' ? '' : tone}`}><b>{title}</b>{children && <p>{children}</p>}</div>;
 }
@@ -67,21 +74,56 @@ export default function Upload() {
   const [over, setOver] = useState(false);
   const raw = useRef(null);
   const fileInput = useRef(null);
+  const [backup, setBackup] = useState(null); // the offline copy of the last NetSuite pull
+  const [lcInfo, setLcInfo] = useState(null); // the landed cost sheet
+  const lcInput = useRef(null);
   useEffect(() => { if (result?.ok) toast?.(`Upload accepted - ${int(result.rows)} rows are live.`); }, [result]);
+  useEffect(() => {
+    let on = true;
+    backupInfo().then((b) => { if (on) setBackup(b); });
+    lcSheetInfo().then((s) => { if (on) setLcInfo(s); });
+    return () => { on = false; };
+  }, []);
 
   if (!key) return <Lock onUnlock={setKey} />;
 
   const finish = async (out) => {
-    if (!out.ok) { setResult({ ok: false, validation: out.validation }); return; }
+    if (!out.ok) { setResult({ ok: false, validation: out.validation }); return false; }
     setBusy({ stage: 'Publishing', pct: 0.9 });
     const saved = await saveDataset(out.packed, key, (p) => setBusy({ stage: 'Publishing', pct: 0.9 + 0.1 * p }));
     apply(out.packed, saved.mode === 'shared' ? 'shared' : 'local');
     setResult({ ok: true, rows: out.packed.meta.unitsLoaded, mode: saved.mode, warnings: out.packed.validation.warnings });
+    return true;
+  };
+  // Keep one offline copy of the pull as a compressed .xlsx; each sync replaces it. A failure here does not undo the sync.
+  const keepOfflineCopy = async (r) => {
+    try {
+      setBusy({ stage: 'Writing the offline copy (.xlsx)', pct: 0.92 });
+      const bytes = await buildOfflineCopy(r);
+      setBusy({ stage: 'Saving the offline copy', pct: 0.96 });
+      const info = { fileName: `netsuite-pull-${stamp()}.xlsx`, rows: r.rows.length, bills: r.extras?.bills?.length || 0, landed: r.extras?.landed?.length || 0 };
+      await saveBackup(bytes, info, key, (p) => setBusy({ stage: 'Saving the offline copy', pct: 0.96 + 0.04 * p }));
+      setBackup(await backupInfo());
+    } catch (e) {
+      setResult((x) => ({ ...x, backupError: e.message }));
+    }
+  };
+  const downloadBackup = async () => {
+    if (busy || !backup) return;
+    setBusy({ stage: 'Downloading the offline copy', pct: 0.3 });
+    try {
+      const bytes = await loadBackup(backup);
+      if (!bytes) throw new Error('The offline copy is no longer in this browser.');
+      await saveBytes(backup.fileName || 'netsuite-pull.xlsx', bytes, XLSX_MIME);
+    } catch (e) { toast(e.message); } finally { setBusy(null); }
   };
   const onFile = async (file) => {
     if (!file || busy) return;
     setResult(null); setBusy({ stage: 'Opening the file', pct: 0.02 });
-    try { await finish(await processUpload(file, (stage, p) => setBusy({ stage, pct: p }))); }
+    try {
+      const lcSheet = await loadLcSheet().catch(() => null);
+      await finish(await processUpload(file, (stage, p) => setBusy({ stage, pct: p }), { lcSheet }));
+    }
     catch (e) { setResult({ ok: false, error: e.message }); }
     finally { setBusy(null); }
   };
@@ -90,13 +132,38 @@ export default function Upload() {
     raw.current = r;
     return r;
   };
+  // pull, apply the landed cost sheet (if one is stored), publish, then keep the offline copy
+  const runSync = async () => {
+    const r = await pull();
+    const lcSheet = await loadLcSheet().catch(() => null);
+    const extras = { ...r.extras, lcSheet };
+    if (await finish(await processRows(r.header, r.rows, 'NetSuite Data Sync', (stage, p) => setBusy({ stage, pct: p }), extras))) await keepOfflineCopy(r);
+  };
   const sync = async () => {
     if (busy) return;
     setResult(null); setBusy({ stage: 'Connecting to NetSuite', pct: 0.03 });
+    try { await runSync(); } catch (e) { setResult({ ok: false, error: e.message }); }
+    finally { setBusy(null); }
+  };
+  // landed cost sheet: save it, then re-sync so the dashboard uses it straight away
+  const onLcFile = async (file) => {
+    if (!file || busy) return;
+    setResult(null); setBusy({ stage: 'Reading the landed cost sheet', pct: 0.02 });
     try {
-      const r = await pull();
-      await finish(await processRows(r.header, r.rows, 'NetSuite Data Sync', (stage, p) => setBusy({ stage, pct: p }), r.extras));
+      const { sheet } = await readLcSheet(file, (stage, p) => setBusy({ stage, pct: 0.02 + 0.03 * p }));
+      setBusy({ stage: 'Saving the landed cost sheet', pct: 0.05 });
+      await saveLcSheet(sheet, key);
+      setLcInfo(await lcSheetInfo());
+      toast(`Landed cost sheet saved - ${int(sheet.lines)} lines for ${int(sheet.cards.length)} cards. Applying it with a NetSuite Data Sync.`);
+      setBusy({ stage: 'Connecting to NetSuite', pct: 0.06 });
+      await runSync();
     } catch (e) { setResult({ ok: false, error: e.message }); }
+    finally { setBusy(null); }
+  };
+  const removeLc = async () => {
+    if (busy || !window.confirm('Remove the landed cost sheet? The dashboard goes back to the landed cost on the vehicle cards only (applied with a NetSuite Data Sync).')) return;
+    setResult(null); setBusy({ stage: 'Removing the landed cost sheet', pct: 0.03 });
+    try { await removeLcSheet(key); setLcInfo(null); await runSync(); } catch (e) { setResult({ ok: false, error: e.message }); }
     finally { setBusy(null); }
   };
   const downloadRaw = async () => {
@@ -162,6 +229,37 @@ export default function Upload() {
           ) : <p className="muted" style={{ padding: '4px 6px' }}>No dataset loaded yet.</p>}
         </Card>
       </div>
+      <Card title="Offline copy of the last NetSuite pull" sub={`A compressed Excel file saved after every NetSuite Data Sync; each sync replaces it${backup && !backup.shared ? ' (this browser only - the site has no shared store)' : ''}`}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '4px 6px 8px' }}>
+          {backup ? (
+            <>
+              <dl className="kv" style={{ margin: 0, flex: '1 1 380px' }}>
+                <dt>File</dt><dd>{backup.fileName}</dd>
+                <dt>Saved</dt><dd>{dateTime(backup.savedAt)} <span className="muted">({timeAgo(backup.savedAt)})</span></dd>
+                <dt>Contents</dt><dd>{int(backup.rows)} vehicle rows, {int(backup.bills)} vendor bills, {int(backup.landed)} landed-cost lines{backup.bytes ? ` - ${mb(backup.bytes)}` : ''}</dd>
+              </dl>
+              <button type="button" className="btn btn-primary" onClick={downloadBackup} disabled={!!busy}>Download offline copy (.xlsx)</button>
+            </>
+          ) : <p className="muted" style={{ margin: 0 }}>No offline copy yet. One is saved the next time NetSuite Data Sync finishes.</p>}
+        </div>
+      </Card>
+      <Card title="Landed cost sheet" sub="Used until the NetSuite role can read the landed-cost journals. Lines are matched by vehicle card (STK number = Internal ID); the landed cost on the card always wins, the sheet fills cards that have none and splits landed cost by type">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '4px 6px 8px' }}>
+          {lcInfo ? (
+            <dl className="kv" style={{ margin: 0, flex: '1 1 380px' }}>
+              <dt>File</dt><dd>{lcInfo.fileName}</dd>
+              <dt>Uploaded</dt><dd>{dateTime(lcInfo.savedAt)} <span className="muted">({timeAgo(lcInfo.savedAt)})</span>{lcInfo.shared ? '' : <span className="muted"> - this browser only</span>}</dd>
+              <dt>Contents</dt><dd>{int(lcInfo.lines)} landed-cost lines for {int(lcInfo.cards)} vehicle cards</dd>
+              {v?.landed?.sheet && <><dt>In the dashboard</dt><dd>{int(v.landed.sheet.matched)} cards matched; landed cost filled on {int(v.landed.sheet.filled)} cards that had none (AED {int(v.landed.sheet.filledAED)})</dd></>}
+            </dl>
+          ) : <p className="muted" style={{ margin: 0, flex: '1 1 380px' }}>No sheet uploaded. Landed cost comes from the vehicle cards only, split by type from the IBV landed-cost lines.</p>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="btn btn-primary" onClick={() => lcInput.current?.click()} disabled={!!busy}>{lcInfo ? 'Upload a new sheet' : 'Upload landed cost sheet'}</button>
+            {lcInfo && <button type="button" className="btn" onClick={removeLc} disabled={!!busy}>Remove</button>}
+          </div>
+          <input ref={lcInput} type="file" accept=".xlsx,.xlsm,.xls,.csv" hidden onChange={(e) => { onLcFile(e.target.files?.[0]); e.target.value = ''; }} />
+        </div>
+      </Card>
       <Card title="Costs page" sub={costsHidden ? 'Hidden from the menu for everyone' + (settings?.shared ? '' : ' (this browser only - the site has no shared store)') : 'Shown in the menu for everyone' + (settings?.shared ? '' : ' (this browser only)')}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '4px 6px 8px' }}>
           <Chip tone={costsHidden ? 'neutral' : 'good'} icon={false}>{costsHidden ? 'Hidden' : 'Visible'}</Chip>
@@ -174,6 +272,7 @@ export default function Upload() {
           {int(result.rows)} rows are now live across all pages{result.mode === 'local' ? ' in this browser. This site has no shared store, so other people need to upload too (see README: deploy with functions).' : '.'}
         </Banner>
       )}
+      {result?.backupError && <Banner tone="warn" title="Offline copy not saved">{result.backupError} The dashboard data was updated; the previous offline copy is kept.</Banner>}
       {result && !result.ok && (
         <Banner tone="critical" title="Upload rejected - the live dashboard was not changed">
           {result.error || result.validation?.errors?.join(' ') || 'The file could not be validated.'}
@@ -274,6 +373,11 @@ export default function Upload() {
               <Check tone={v.landed.coverage < 0.9 ? 'warn' : 'good'} title={`Landed cost posted on ${pct(v.landed.coverage, 0)} of received imports`}>
                 {int(v.landed.importsNotPosted)} received imported cars have none, including {int(v.landed.inStockImportsNoLanded)} in stock. Costs are shown exactly as posted - nothing is estimated.
               </Check>
+              {v.landed.sheet && (
+                <Check title={`Landed cost sheet: ${int(v.landed.sheet.matched)} cards matched`}>
+                  Landed cost filled on {int(v.landed.sheet.filled)} cards whose card had none (AED {int(v.landed.sheet.filledAED)}); every matched car's landed cost is split by type from its own lines.
+                </Check>
+              )}
               <Check tone={v.ageing.estimated ? 'warn' : 'good'} title="Age counts from the IBV date">
                 {v.ageing.estimated ? `${int(v.ageing.estimated)} cars in stock have no IBV, so their age counts from the purchase date.` : 'Every car in stock has an IBV date.'}
               </Check>

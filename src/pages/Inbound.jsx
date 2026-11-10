@@ -9,11 +9,15 @@ import { hBars, columns, lines, rowsHeight } from '../components/charts.js';
 import { Kpi, ChartCard, Banner, Card, Chip } from '../components/ui.jsx';
 import ModelCost from '../components/ModelCost.jsx';
 import LandedMix, { lcCatPred } from '../components/LandedMix.jsx';
-import { LCS } from '../data/landed.js';
+import { IMPORT } from '../data/landed.js';
 import { PageHead, timeAxis, clampRange, ETA_TONE, ETA_LABEL } from './common.jsx';
 import { int, aed, aedFull, pct, date, dec, yearOf } from '../format.js';
 
 const NO_CODE = 'No model code';
+// Landed cost status of received cars by how they were bought: only imports are expected to carry landed cost,
+// so local (UAE-vendor) purchases and transfers get their own bars instead of counting as "not posted".
+const LC_GROUPS = ['Import - landed cost posted', 'Import - not posted', 'Local purchase (UAE vendor)', 'Transfer / no PO'];
+const lcGroup = (v) => (!v.po ? LC_GROUPS[3] : v.route === IMPORT ? LC_GROUPS[v.lc > 0 ? 0 : 1] : LC_GROUPS[2]);
 
 export default function Inbound() {
   const { ds } = useData();
@@ -25,7 +29,7 @@ export default function Inbound() {
   const [f, set, reset, toggle] = useFilters(defaults);
   const setF = (id, v) => { set(id, v); if (id === 'period') set('recvT', []); }; // weeks/months on the axis depend on the period
   // the one KPI card that stands for a subset of the received cars
-  const KPI_CARDS = { posted: { label: 'Received cars with landed cost posted', test: (v) => v.lc > 0 } };
+  const KPI_CARDS = { posted: { label: 'Received imports with landed cost posted', test: (v) => v.route === IMPORT && v.lc > 0 } };
   const opts = useMemo(() => ({
     entity: options(S, (s) => s.entity, { sortBy: 'name' }), mode: options(S, (s) => s.mode), route: options(S, (s) => s.route),
     brand: options(S.flatMap((s) => s.brands || []), (b) => b),
@@ -68,7 +72,7 @@ export default function Inbound() {
     const lcCat = lcCatPred(f.lcCat, LC); // landed-cost type picked on the distribution chart
     return V.filter((v) => v.veh && v.ship && sh.has(v.ship) && (skip === 'brand' || match(v.brand, f.brand))
       && (skip === 'model' || !f.model.length || f.model.includes(v.model ?? 'Unknown')) && (skip === 'lcCat' || !lcCat || lcCat(v))
-      && (skip === 'lcs' || !f.lcs.length || f.lcs.includes(v.lcs)) && (!card || card(v)));
+      && (skip === 'lcs' || !f.lcs.length || f.lcs.includes(lcGroup(v))) && (!card || card(v)));
   };
   const cars = useMemo(() => carsOf(), [S, V, f, range.from, range.to, flowAx]);
 
@@ -77,7 +81,8 @@ export default function Inbound() {
     const shipsN = new Set(cars.map((v) => v.ship)).size;
     return {
       units: cars.length, ships: shipsN, pp, lc, total: pp + lc,
-      posted: cars.filter((v) => v.lc > 0).length,
+      imports: cars.filter((v) => v.route === IMPORT).length, posted: cars.filter((v) => v.route === IMPORT && v.lc > 0).length,
+      local: cars.filter((v) => lcGroup(v) === LC_GROUPS[2]).length,
       openN: open.length, late: open.filter((s) => s.stage !== 'In transit - ETA ahead').length,
     };
   }, [cars, open]);
@@ -125,10 +130,14 @@ export default function Inbound() {
   // landed cost status of the received cars (the chart skips its own pick)
   const status = useMemo(() => {
     const rows = carsOf('lcs');
-    return { n: rows.length, by: LCS.map((s) => [s, rows.filter((v) => v.lcs === s).length]) };
+    const by = LC_GROUPS.map((s) => [s, 0]);
+    let localPosted = 0;
+    for (const v of rows) { const g = lcGroup(v); by[LC_GROUPS.indexOf(g)][1]++; if (g === LC_GROUPS[2] && v.lc > 0) localPosted++; }
+    return { n: rows.length, by: by.filter(([g, c]) => c > 0 || f.lcs.includes(g)), localPosted }; // empty groups (e.g. no transfers received) stay off the chart
   }, [S, V, f, range.from, range.to, flowAx]);
   const statusOpt = useMemo(() => hBars(t, status.by.map((s) => s[0]), [{ name: 'Cars received', data: status.by.map((s) => s[1]), color: t.s1 }],
-    { catWidth: 170, selected: f.lcs, endText: (i) => `${int(status.by[i][1])} (${pct(status.n ? status.by[i][1] / status.n : 0, 0)})` }), [t, status, f.lcs]);
+    { catWidth: 190, selected: f.lcs, endText: (i) => `${int(status.by[i][1])} (${pct(status.n ? status.by[i][1] / status.n : 0, 0)})`,
+      tipFoot: (i) => (status.by[i][0] === LC_GROUPS[2] ? `Bought from UAE vendors - landed cost is not expected (${int(status.localPosted)} have some posted)` : status.by[i][0] === LC_GROUPS[3] ? 'Moved from a sister company or legacy cards - the cost is inside the transfer price' : null) }), [t, status, f.lcs]);
   const mixCars = useMemo(() => carsOf('lcCat'), [S, V, LC, f, range.from, range.to, flowAx]); // and the distribution skips its cost-type pick
 
   // completeness for shipments created in the period
@@ -202,8 +211,8 @@ export default function Inbound() {
         <Kpi {...kpiClick(f, set, null)} label="Purchase cost" value={aed(k.pp)} sub={aedFull(k.pp)} tone="money" />
         <Kpi {...kpiClick(f, set, null)} label="Landed cost" value={aed(k.lc)} sub={aedFull(k.lc)} tone="money" />
         <Kpi {...kpiClick(f, set, null)} label="Grand total cost" value={aed(k.total)} sub="Purchase + landed cost" tone="money" />
-        <Kpi {...kpiClick(f, set, 'posted')} label="Landed cost posted" value={pct(k.units ? k.posted / k.units : null, 0)}
-          sub={`${int(k.posted)} of ${int(k.units)} received cars`} />
+        <Kpi {...kpiClick(f, set, 'posted')} label="Landed cost posted" value={pct(k.imports ? k.posted / k.imports : null, 0)}
+          sub={`Imports only: ${int(k.posted)} of ${int(k.imports)} · ${int(k.local)} local purchases not counted`} />
       </div>
       <div className="grid-2">
         <ChartCard title={`Cars received per ${flow.ax.unit}`} sub={`By receiving date in the yard · receiving dates are recorded from ${isFinite(firstRecv) ? date(firstRecv) : '-'}`} table={flowTable}>
@@ -214,7 +223,7 @@ export default function Inbound() {
         </ChartCard>
       </div>
       <div className="grid-2">
-        <ChartCard title="Landed cost status" sub={`Cars received in the period · ${int(status.n)} cars`}
+        <ChartCard title="Landed cost status" sub={`Cars received in the period · ${int(status.n)} cars · only imports are expected to carry landed cost`}
           table={{ columns: [{ key: 's', label: 'Landed cost status' }, { key: 'n', label: 'Cars received', align: 'r', fmt: int }], rows: status.by.map(([s, c]) => ({ s, n: c, __key: s })), search: false }}>
           <EChart option={statusOpt} height={rowsHeight(status.by.length, 40)} label="Received cars by landed cost status" onPick={(i) => toggle('lcs', status.by[i][0])} />
         </ChartCard>

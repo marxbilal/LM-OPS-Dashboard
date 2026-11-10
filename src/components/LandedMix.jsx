@@ -1,5 +1,6 @@
 // "Landed cost distribution": the posted landed cost of the given cars, split by cost type
-// (ocean freight, clearing, customs duty...) in each car's IBV landed-cost proportions. Used on Inbound, Outbound and Costs.
+// (ocean freight, clearing, port handling...): each car's own lines from the landed cost sheet, else its IBV's
+// landed-cost proportions in NetSuite. Used on Inbound, Outbound and Costs.
 import { useMemo } from 'react';
 import { useChartTheme } from '../theme.js';
 import EChart from './EChart.jsx';
@@ -24,7 +25,7 @@ export function landedMix(cars, LC) {
   return { rows, cars: n, total: rows.reduce((a, r) => a + r.v, 0) };
 }
 
-/** Predicate for picked cost types: cars whose landed cost includes one (or, for "Not itemised", has no IBV lines). */
+/** Predicate for picked cost types: cars whose landed cost includes one (or, for "Not itemised", has no lines). */
 export const lcCatPred = (sel, LC) => (sel?.length && LC ? (v) => {
   const sp = lcSplit(v, LC);
   return sel.some((c) => (c === NOT_ITEMISED ? v.lc > 0 && !sp : sp?.[LC.cats.indexOf(c)] > 0));
@@ -38,11 +39,11 @@ export default function LandedMix({ cars, LC, selected, onPick, what = 'cars' })
     catWidth: 160, fmt: (v) => aedFull(v), selected,
     endText: (i) => `${aed(mix.rows[i].v)} (${pct(share(mix.rows[i].v), 0)})`,
     tipExtra: (i) => [{ name: 'Share of landed cost', value: pct(share(mix.rows[i].v), 1) }],
-    tipFoot: (i) => (mix.rows[i].c === NOT_ITEMISED ? 'Landed cost posted on the car but no landed-cost lines on its IBV' : null),
+    tipFoot: (i) => (mix.rows[i].c === NOT_ITEMISED ? 'Landed cost on the car, but no itemised lines for it in the landed cost sheet or on its IBV' : null),
   }), [t, mix, selected]);
   return (
     <ChartCard title="Landed cost distribution"
-      sub={mix ? `Posted landed cost of ${int(mix.cars)} ${what} · ${aed(mix.total)} · split by the IBV landed-cost lines in NetSuite` : 'Split by the IBV landed-cost lines in NetSuite'}
+      sub={mix ? `Posted landed cost of ${int(mix.cars)} ${what} · ${aed(mix.total)} · split by cost type` : 'Split by cost type'}
       table={mix ? {
         columns: [{ key: 'c', label: 'Cost type' }, { key: 'v', label: 'Landed cost (AED)', align: 'r', fmt: int },
           { key: 's', label: 'Share', align: 'r', fmt: (x) => pct(x, 1), csv: (r) => (r.s * 100).toFixed(1) }],
